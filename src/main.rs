@@ -341,8 +341,7 @@ fn parse_faults(
             })?;
             if count == 0 || count >= max_messages {
                 return Err(
-                    "--close-after-messages must be at least 1 and less than --messages"
-                        .to_owned(),
+                    "--close-after-messages must be at least 1 and less than --messages".to_owned(),
                 );
             }
             Some(count)
