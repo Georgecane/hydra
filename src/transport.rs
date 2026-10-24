@@ -437,7 +437,10 @@ pub fn send_payload(
     timeout: Duration,
 ) -> Result<Response, FrameError> {
     let responses = send_session(address, &[payload.to_vec()], limit, timeout)?;
-    Ok(responses.into_iter().next().expect("single-message session returns one response"))
+    Ok(responses
+        .into_iter()
+        .next()
+        .expect("single-message session returns one response"))
 }
 
 /// Send several payloads over one TCP connection and validate each framed response.
@@ -475,7 +478,10 @@ pub fn send_session(
     }
 
     let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| {
-        frame_error(status_for_io(&error), format!("connect to {address}: {error}"))
+        frame_error(
+            status_for_io(&error),
+            format!("connect to {address}: {error}"),
+        )
     })?;
     configure_stream(&stream, timeout)
         .map_err(|error| frame_error(status_for_io(&error), error.to_string()))?;

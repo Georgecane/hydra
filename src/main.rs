@@ -1,6 +1,6 @@
 use hydra::transport::{
-    checksum, send_session, serve_session, Status, DEFAULT_MAX_PAYLOAD_BYTES,
-    DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
+    checksum, send_session, serve_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
+    MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
@@ -126,7 +126,14 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
 fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     ensure_keys(
         options,
-        &["connect", "timeout-ms", "max-bytes", "payload", "file", "messages"],
+        &[
+            "connect",
+            "timeout-ms",
+            "max-bytes",
+            "payload",
+            "file",
+            "messages",
+        ],
     )?;
     if options.contains_key("payload") && options.contains_key("file") {
         return Err("choose either --payload or --file, not both".to_owned());
@@ -145,8 +152,8 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     };
 
     let payloads = vec![payload; max_messages];
-    let responses = send_session(address, &payloads, max_bytes, timeout)
-        .map_err(|error| error.to_string())?;
+    let responses =
+        send_session(address, &payloads, max_bytes, timeout).map_err(|error| error.to_string())?;
 
     for (index, response) in responses.iter().enumerate() {
         if response.status != Status::Ok {
@@ -164,7 +171,10 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
         ));
     }
 
-    let total_bytes: usize = responses.iter().map(|response| response.payload.len()).sum();
+    let total_bytes: usize = responses
+        .iter()
+        .map(|response| response.payload.len())
+        .sum();
     println!(
         "PASS status=Ok messages={} bytes={} checksum_last={:08x} timeout_ms={}",
         responses.len(),
@@ -249,7 +259,9 @@ fn parse_messages(options: &HashMap<String, String>) -> Result<usize, String> {
         None => 1,
     };
     if !(1..=MAX_MESSAGES_PER_SESSION).contains(&value) {
-        return Err(format!("--messages must be between 1 and {MAX_MESSAGES_PER_SESSION}"));
+        return Err(format!(
+            "--messages must be between 1 and {MAX_MESSAGES_PER_SESSION}"
+        ));
     }
     Ok(value)
 }
