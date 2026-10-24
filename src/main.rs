@@ -1,6 +1,6 @@
 use hydra::transport::{
-    checksum, send_payload, serve_once, Status, DEFAULT_MAX_PAYLOAD_BYTES,
-    DEFAULT_TIMEOUT_MS, MAX_PAYLOAD_BYTES,
+    checksum, send_payload, serve_once, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
+    MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
@@ -41,7 +41,11 @@ fn run() -> Result<(), String> {
 
 fn run_graph_demo() -> Result<(), String> {
     let mut graph = TransportGraph::new();
-    graph.add_link("user-a", "internal-service", LinkCapability::FixedServiceApi);
+    graph.add_link(
+        "user-a",
+        "internal-service",
+        LinkCapability::FixedServiceApi,
+    );
     graph.add_link(
         "internal-service",
         "public-origin",
@@ -88,7 +92,10 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
     let timeout = parse_timeout(options)?;
     let max_bytes = parse_max_bytes(options)?;
     let upstream = if is_relay {
-        Some(parse_loopback_addr(required(options, "upstream")?, "upstream")?)
+        Some(parse_loopback_addr(
+            required(options, "upstream")?,
+            "upstream",
+        )?)
     } else {
         None
     };
@@ -135,8 +142,8 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
         b"Hydra local transport test".to_vec()
     };
 
-    let response = send_payload(address, &payload, max_bytes, timeout)
-        .map_err(|error| error.to_string())?;
+    let response =
+        send_payload(address, &payload, max_bytes, timeout).map_err(|error| error.to_string())?;
     if response.status != Status::Ok {
         return Err(format!("remote node returned {}", response.status));
     }
@@ -167,7 +174,10 @@ fn parse_options(args: &[String]) -> Result<HashMap<String, String>, String> {
         if value.starts_with("--") {
             return Err(format!("missing value for {key}"));
         }
-        if options.insert(key.trim_start_matches("--").to_owned(), value.clone()).is_some() {
+        if options
+            .insert(key.trim_start_matches("--").to_owned(), value.clone())
+            .is_some()
+        {
             return Err(format!("duplicate option {key}"));
         }
         index += 2;
@@ -196,7 +206,9 @@ fn parse_loopback_addr(value: &str, label: &str) -> Result<SocketAddr, String> {
         .parse()
         .map_err(|error| format!("invalid --{label} socket address {value:?}: {error}"))?;
     if !address.ip().is_loopback() {
-        return Err(format!("--{label} must use a loopback IP for this local-only experiment"));
+        return Err(format!(
+            "--{label} must use a loopback IP for this local-only experiment"
+        ));
     }
     Ok(address)
 }
@@ -222,7 +234,9 @@ fn parse_max_bytes(options: &HashMap<String, String>) -> Result<usize, String> {
         None => DEFAULT_MAX_PAYLOAD_BYTES,
     };
     if !(1..=MAX_PAYLOAD_BYTES).contains(&value) {
-        return Err(format!("--max-bytes must be between 1 and {MAX_PAYLOAD_BYTES}"));
+        return Err(format!(
+            "--max-bytes must be between 1 and {MAX_PAYLOAD_BYTES}"
+        ));
     }
     Ok(value)
 }

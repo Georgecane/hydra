@@ -1,6 +1,4 @@
-use hydra::transport::{
-    send_payload, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
-};
+use hydra::transport::{send_payload, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS};
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -25,7 +23,11 @@ impl RunningServer {
         reader.read_line(&mut line).expect("read readiness marker");
         assert!(line.starts_with("READY "), "node failed to start: {line:?}");
         let address = line.trim_start_matches("READY ").trim().parse().unwrap();
-        Self { child, stdout: reader, address }
+        Self {
+            child,
+            stdout: reader,
+            address,
+        }
     }
 
     fn wait_success(&mut self) {
@@ -53,12 +55,17 @@ fn free_loopback_address() -> SocketAddr {
 
 #[test]
 fn three_process_route_transfers_binary_payload_through_relay() {
-    let mut origin = RunningServer::start(&[
-        "origin", "--listen", "127.0.0.1:0", "--timeout-ms", "5000",
-    ]);
+    let mut origin =
+        RunningServer::start(&["origin", "--listen", "127.0.0.1:0", "--timeout-ms", "5000"]);
     let upstream = origin.address.to_string();
     let mut relay = RunningServer::start(&[
-        "relay", "--listen", "127.0.0.1:0", "--upstream", &upstream, "--timeout-ms", "5000",
+        "relay",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        &upstream,
+        "--timeout-ms",
+        "5000",
     ]);
 
     let payload: Vec<u8> = (0..256 * 1024)
@@ -73,7 +80,10 @@ fn three_process_route_transfers_binary_payload_through_relay() {
     .expect("send over client -> relay -> origin");
 
     assert_eq!(response.status, Status::Ok);
-    assert_eq!(response.payload, payload, "end-to-end payload must be byte-identical");
+    assert_eq!(
+        response.payload, payload,
+        "end-to-end payload must be byte-identical"
+    );
     assert_eq!(response.checksum, hydra::transport::checksum(&payload));
     relay.wait_success();
     origin.wait_success();
@@ -83,15 +93,21 @@ fn three_process_route_transfers_binary_payload_through_relay() {
 fn relay_reports_when_upstream_is_unavailable() {
     let unavailable = free_loopback_address();
     let mut relay = RunningServer::start(&[
-        "relay", "--listen", "127.0.0.1:0", "--upstream", &unavailable.to_string(),
-        "--timeout-ms", "1500",
+        "relay",
+        "--listen",
+        "127.0.0.1:0",
+        "--upstream",
+        &unavailable.to_string(),
+        "--timeout-ms",
+        "1500",
     ]);
     let response = send_payload(
         relay.address,
         b"upstream failure probe",
         DEFAULT_MAX_PAYLOAD_BYTES,
         Duration::from_millis(1500),
-    ).expect("relay should send a framed error response");
+    )
+    .expect("relay should send a framed error response");
     assert_eq!(response.status, Status::UpstreamUnavailable);
     assert!(response.payload.is_empty());
     relay.wait_failure();
@@ -100,14 +116,21 @@ fn relay_reports_when_upstream_is_unavailable() {
 #[test]
 fn origin_rejects_payload_larger_than_configured_limit() {
     let mut origin = RunningServer::start(&[
-        "origin", "--listen", "127.0.0.1:0", "--max-bytes", "32", "--timeout-ms", "1500",
+        "origin",
+        "--listen",
+        "127.0.0.1:0",
+        "--max-bytes",
+        "32",
+        "--timeout-ms",
+        "1500",
     ]);
     let response = send_payload(
         origin.address,
         &[0x5a; 33],
         128,
         Duration::from_millis(1500),
-    ).expect("origin should send a framed size rejection");
+    )
+    .expect("origin should send a framed size rejection");
     assert_eq!(response.status, Status::PayloadTooLarge);
     assert!(response.payload.is_empty());
     origin.wait_failure();
@@ -116,7 +139,13 @@ fn origin_rejects_payload_larger_than_configured_limit() {
 #[test]
 fn command_line_refuses_non_loopback_destinations() {
     let result = Command::new(env!("CARGO_BIN_EXE_hydra-lab"))
-        .args(["send", "--connect", "192.0.2.1:3000", "--payload", "not sent"])
+        .args([
+            "send",
+            "--connect",
+            "192.0.2.1:3000",
+            "--payload",
+            "not sent",
+        ])
         .output()
         .expect("run argument validation");
     assert!(!result.status.success());
