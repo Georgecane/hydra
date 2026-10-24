@@ -4,21 +4,21 @@
 
 Can a client send arbitrary bytes through a controlled intermediate node to a controlled origin, and can the test reliably detect blocked, corrupted, oversized, or unavailable paths?
 
-This milestone is intentionally more modest than a real Meshnet. First demonstrate the data-plane behavior over a known, controlled TCP path. Only then investigate whether any real-world transport adapter is permitted and technically able to provide equivalent forwarding.
+This milestone demonstrates the data plane over a known, controlled TCP path. Only after this baseline is stable should Hydra investigate whether any real-world transport adapter is documented, authorized, and technically able to provide equivalent forwarding.
 
 ## Scope and boundaries
 
-- The automated tests use locally controlled processes bound to loopback addresses only.
+- Automated process tests use locally controlled nodes bound to loopback addresses only.
 - The code rejects non-loopback listeners, destinations, and upstreams.
 - It does not capture traffic, scan networks, log into third-party apps, or tunnel through third-party infrastructure.
-- The existence of an application session or API connection does not establish permission or ability to forward arbitrary data.
-- CRC-32 is used for accidental-corruption detection only. It is not cryptographic authentication, confidentiality, or protection against an active attacker.
+- An application session or API connection does not establish permission or ability to forward arbitrary data.
+- CRC-32 detects accidental corruption only. It is not authentication, encryption, or active-attacker protection.
 
 ## Topology
 
 Client process -> relay process -> origin process
 
-The origin echoes the verified payload. The relay reads a bounded request frame, forwards the payload to its explicitly configured upstream, checks the upstream response frame, and relays the response to the client. The client verifies that the returned payload is byte-for-byte identical to the original.
+The origin echoes each verified payload. The relay validates a bounded request frame, forwards it to an explicitly configured upstream, validates the upstream response, and relays the response to the client. The client checks that every returned payload is byte-for-byte identical to its corresponding input.
 
 ## Frame format
 
@@ -35,33 +35,40 @@ Response frame:
 - 1 byte: status code
 - 8 bytes: payload length, unsigned big-endian
 - 4 bytes: CRC-32, unsigned big-endian
-- N bytes: echoed payload on success; error responses carry no body
+- N bytes: echoed payload on success; an error response carries no body
 
-The receiver checks the advertised size before allocating the payload buffer. The default limit is 1 MiB and the hard maximum is 16 MiB. Read, write, and connection timeouts are set for every TCP stream. Each origin or relay serves one client and exits, keeping test runs deterministic.
+Receivers check advertised lengths before allocating a payload buffer. The per-frame default limit is 1 MiB and the hard maximum is 16 MiB. A TCP session supports at most 64 frames and at most 64 MiB of cumulative request data. Read, write, and connect timeouts are configured. The origin or relay serves one session per process, then exits.
 
-## Procedure
+## Run a four-frame local session
 
-1. Start an origin bound to 127.0.0.1.
-2. Start a relay bound to 127.0.0.1 and configured to forward to that origin.
-3. Send a binary payload from a separate client process.
-4. Verify status, checksum, and exact byte equality at the client.
-5. Repeat with an unavailable upstream and confirm a framed error rather than a false success.
-6. Configure a small maximum and confirm oversized payloads are rejected before body allocation.
-7. Run corruption, truncation, route-model, formatting, Clippy, and test checks.
+Start an origin:
 
-## Success criteria
+    cargo run --bin hydra-lab -- origin --listen 127.0.0.1:4000 --messages 4
 
-- Multi-process client -> relay -> origin transfer preserves all bytes.
-- Binary values such as zero bytes and bytes above 127 are preserved.
-- Invalid markers, truncated frames, checksum mismatches, and over-limit lengths are rejected.
-- An unavailable upstream is reported as an error, not a successful transfer.
-- Non-loopback destinations are refused by the experiment harness.
-- CI passes formatting, Clippy with warnings denied, and all unit/integration tests.
+Start a relay:
 
-## What this does not prove
+    cargo run --bin hydra-lab -- relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4
 
-Passing these tests proves that Hydra's controlled local protocol can forward bytes across the tested topology. It does not establish that a particular domestic service, third-party app, or network during an outage exposes a legitimate arbitrary-payload relay. Every candidate transport must be evaluated using documented behavior, authorization, and a separate test plan.
+Send four frames:
+
+    cargo run --bin hydra-lab -- send --connect 127.0.0.1:4001 --payload "hello Hydra" --messages 4
+
+All three commands must use the same message count. The integration test uses separate client, relay, and origin processes and transfers several different binary payloads over a single client-to-relay socket and a reused relay-to-origin socket.
+
+## Procedure and success criteria
+
+1. Verify that the graph model rejects service-specific API links and unknown links as generic relays.
+2. Send several distinct binary payloads through client -> relay -> origin in one TCP session.
+3. Verify per-frame checksums and exact byte equality for every response.
+4. Verify that invalid markers, truncated frames, checksum mismatches, and over-limit lengths are rejected.
+5. Verify that unavailable upstreams produce a framed error rather than a false success.
+6. Verify that non-loopback destinations are refused by the experiment harness.
+7. Run formatting, Clippy with warnings denied, and all unit/integration tests.
+
+## Current limits
+
+This local protocol validates data transport through an explicitly configured relay. It does not prove that any third-party app or restricted network can relay arbitrary data, or that such use is authorized. Every candidate transport requires a separate protocol, permission, and feasibility review.
 
 ## Next milestone
 
-After the local baseline is stable, add observability and fault injection: relay termination mid-transfer, delayed response, truncated upstream response, and repeatable multi-message sessions. Then design a transport-adapter interface that can represent link capability, consent, reliability, and restrictions without assuming every reachable endpoint can relay data.
+Add controlled fault injection for delayed responses, upstream truncation, and relay termination during a transfer. Verify that failures are reported distinctly and cannot be mistaken for successful payload delivery. Then define a transport-adapter interface that records relay capability, authorization, reliability, and restrictions.

@@ -10,6 +10,8 @@ use std::time::{Duration, Instant};
 pub const DEFAULT_MAX_PAYLOAD_BYTES: usize = 1024 * 1024;
 pub const MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TIMEOUT_MS: u64 = 3_000;
+pub const MAX_MESSAGES_PER_SESSION: usize = 64;
+pub const MAX_SESSION_BYTES: usize = 64 * 1024 * 1024;
 const REQUEST_MAGIC: &[u8; 4] = b"HYD1";
 const RESPONSE_MAGIC: &[u8; 4] = b"HYA1";
 
@@ -54,6 +56,7 @@ pub struct Response {
 pub struct ServerReport {
     pub status: Status,
     pub bytes_received: usize,
+    pub messages_processed: usize,
     pub relayed: bool,
 }
 #[derive(Debug)]
@@ -286,13 +289,35 @@ fn accept_with_timeout(listener: &TcpListener, timeout: Duration) -> io::Result<
 
 /// Serve exactly one TCP client. No non-loopback endpoint is accepted by this lab.
 /// No upstream means the node is the echo origin; an upstream makes it a relay.
+/// Serve exactly one framed message. Kept as a convenience wrapper for one-shot tests.
 pub fn serve_once(
     listener: &TcpListener,
     upstream: Option<SocketAddr>,
     limit: usize,
     timeout: Duration,
 ) -> io::Result<ServerReport> {
+    serve_session(listener, upstream, limit, timeout, 1)
+}
+
+/// Serve one TCP connection carrying multiple length-prefixed messages.
+///
+/// Each individual message is bounded by limit, the message count is capped, and
+/// cumulative request bytes are capped for the lifetime of the session. An upstream
+/// relay reuses one TCP connection to its origin for the entire session.
+pub fn serve_session(
+    listener: &TcpListener,
+    upstream: Option<SocketAddr>,
+    limit: usize,
+    timeout: Duration,
+    max_messages: usize,
+) -> io::Result<ServerReport> {
     validate_limit(limit)?;
+    if !(1..=MAX_MESSAGES_PER_SESSION).contains(&max_messages) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("messages per session must be 1..={MAX_MESSAGES_PER_SESSION}"),
+        ));
+    }
     validate_loopback(listener.local_addr()?, "listener")?;
     if let Some(address) = upstream {
         validate_loopback(address, "upstream")?;
@@ -300,93 +325,173 @@ pub fn serve_once(
 
     let mut client = accept_with_timeout(listener, timeout)?;
     configure_stream(&client, timeout)?;
-    let request = match read_request(&mut client, limit) {
-        Ok(payload) => payload,
-        Err(e) => {
-            let _ = write_error(&mut client, e.status);
+    let mut upstream_stream: Option<TcpStream> = None;
+    let mut bytes_received = 0_usize;
+    let mut messages_processed = 0_usize;
+
+    for _ in 0..max_messages {
+        let request = match read_request(&mut client, limit) {
+            Ok(payload) => payload,
+            Err(error) => {
+                let _ = write_error(&mut client, error.status);
+                return Ok(ServerReport {
+                    status: error.status,
+                    bytes_received,
+                    messages_processed,
+                    relayed: upstream.is_some(),
+                });
+            }
+        };
+        messages_processed += 1;
+        bytes_received = bytes_received.saturating_add(request.len());
+
+        if bytes_received > MAX_SESSION_BYTES {
+            let _ = write_error(&mut client, Status::PayloadTooLarge);
             return Ok(ServerReport {
-                status: e.status,
-                bytes_received: 0,
+                status: Status::PayloadTooLarge,
+                bytes_received,
+                messages_processed,
                 relayed: upstream.is_some(),
             });
         }
-    };
 
-    let response = if let Some(address) = upstream {
-        match TcpStream::connect_timeout(&address, timeout) {
-            Ok(mut stream) => {
-                if configure_stream(&stream, timeout).is_err()
-                    || write_request(&mut stream, &request).is_err()
-                {
-                    Response {
-                        status: Status::UpstreamUnavailable,
-                        payload: Vec::new(),
-                        checksum: checksum(&[]),
-                    }
-                } else {
-                    match read_response(&mut stream, limit) {
-                        Ok(response) => response,
-                        Err(e) => Response {
-                            status: if e.status == Status::Timeout {
-                                Status::Timeout
-                            } else {
-                                Status::UpstreamUnavailable
-                            },
-                            payload: Vec::new(),
-                            checksum: checksum(&[]),
-                        },
-                    }
+        let response = if let Some(address) = upstream {
+            let mut connection_error = None;
+            if upstream_stream.is_none() {
+                match TcpStream::connect_timeout(&address, timeout) {
+                    Ok(stream) => match configure_stream(&stream, timeout) {
+                        Ok(()) => upstream_stream = Some(stream),
+                        Err(error) => connection_error = Some(status_for_io(&error)),
+                    },
+                    Err(error) => connection_error = Some(status_for_io(&error)),
                 }
             }
-            Err(e) => Response {
-                status: if e.kind() == io::ErrorKind::TimedOut {
-                    Status::Timeout
-                } else {
-                    Status::UpstreamUnavailable
-                },
-                payload: Vec::new(),
-                checksum: checksum(&[]),
-            },
-        }
-    } else {
-        Response {
-            status: Status::Ok,
-            checksum: checksum(&request),
-            payload: request.clone(),
-        }
-    };
 
-    write_response(&mut client, response.status, &response.payload)?;
+            let outcome = if let Some(stream) = upstream_stream.as_mut() {
+                forward_frame(stream, &request, limit)
+            } else {
+                Err(connection_error.unwrap_or(Status::UpstreamUnavailable))
+            };
+            match outcome {
+                Ok(response) => response,
+                Err(status) => {
+                    upstream_stream = None;
+                    error_response(status)
+                }
+            }
+        } else {
+            Response {
+                status: Status::Ok,
+                checksum: checksum(&request),
+                payload: request,
+            }
+        };
+
+        write_response(&mut client, response.status, &response.payload)?;
+        if response.status != Status::Ok {
+            return Ok(ServerReport {
+                status: response.status,
+                bytes_received,
+                messages_processed,
+                relayed: upstream.is_some(),
+            });
+        }
+    }
+
     Ok(ServerReport {
-        status: response.status,
-        bytes_received: request.len(),
+        status: Status::Ok,
+        bytes_received,
+        messages_processed,
         relayed: upstream.is_some(),
     })
 }
 
-/// Send one payload to a loopback lab node and validate the framed response.
+fn error_response(status: Status) -> Response {
+    Response {
+        status,
+        payload: Vec::new(),
+        checksum: checksum(&[]),
+    }
+}
+
+fn forward_frame(
+    upstream: &mut TcpStream,
+    request: &[u8],
+    limit: usize,
+) -> Result<Response, Status> {
+    write_request(upstream, request).map_err(|error| status_for_io(&error))?;
+    read_response(upstream, limit).map_err(|error| {
+        if error.status == Status::Timeout {
+            Status::Timeout
+        } else {
+            Status::UpstreamUnavailable
+        }
+    })
+}
+
+/// Send exactly one payload to a loopback node.
 pub fn send_payload(
     address: SocketAddr,
     payload: &[u8],
     limit: usize,
     timeout: Duration,
 ) -> Result<Response, FrameError> {
-    validate_limit(limit).map_err(|e| frame_error(Status::InvalidFrame, e.to_string()))?;
+    let responses = send_session(address, &[payload.to_vec()], limit, timeout)?;
+    Ok(responses.into_iter().next().expect("single-message session returns one response"))
+}
+
+/// Send several payloads over one TCP connection and validate each framed response.
+pub fn send_session(
+    address: SocketAddr,
+    payloads: &[Vec<u8>],
+    limit: usize,
+    timeout: Duration,
+) -> Result<Vec<Response>, FrameError> {
+    validate_limit(limit).map_err(|error| frame_error(Status::InvalidFrame, error.to_string()))?;
     validate_loopback(address, "destination")
-        .map_err(|e| frame_error(Status::InvalidFrame, e.to_string()))?;
-    if payload.len() > limit || payload.len() > MAX_PAYLOAD_BYTES {
+        .map_err(|error| frame_error(Status::InvalidFrame, error.to_string()))?;
+    if payloads.is_empty() || payloads.len() > MAX_MESSAGES_PER_SESSION {
         return Err(frame_error(
-            Status::PayloadTooLarge,
-            "client payload exceeds configured limit",
+            Status::InvalidFrame,
+            format!("message count must be 1..={MAX_MESSAGES_PER_SESSION}"),
         ));
     }
-    let mut stream = TcpStream::connect_timeout(&address, timeout)
-        .map_err(|e| frame_error(status_for_io(&e), format!("connect to {address}: {e}")))?;
+
+    let mut total_bytes = 0_usize;
+    for payload in payloads {
+        if payload.len() > limit || payload.len() > MAX_PAYLOAD_BYTES {
+            return Err(frame_error(
+                Status::PayloadTooLarge,
+                "client payload exceeds configured limit",
+            ));
+        }
+        total_bytes = total_bytes.saturating_add(payload.len());
+        if total_bytes > MAX_SESSION_BYTES {
+            return Err(frame_error(
+                Status::PayloadTooLarge,
+                "session payloads exceed the cumulative byte limit",
+            ));
+        }
+    }
+
+    let mut stream = TcpStream::connect_timeout(&address, timeout).map_err(|error| {
+        frame_error(status_for_io(&error), format!("connect to {address}: {error}"))
+    })?;
     configure_stream(&stream, timeout)
-        .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
-    write_request(&mut stream, payload)
-        .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
-    read_response(&mut stream, limit)
+        .map_err(|error| frame_error(status_for_io(&error), error.to_string()))?;
+
+    let mut responses = Vec::with_capacity(payloads.len());
+    for payload in payloads {
+        write_request(&mut stream, payload)
+            .map_err(|error| frame_error(status_for_io(&error), error.to_string()))?;
+        let response = read_response(&mut stream, limit)?;
+        let is_error = response.status != Status::Ok;
+        responses.push(response);
+        if is_error {
+            break;
+        }
+    }
+    Ok(responses)
 }
 
 #[cfg(test)]

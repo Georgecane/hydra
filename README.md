@@ -26,19 +26,19 @@ Install stable Rust, then run:
 
 Start an origin in terminal 1:
 
-    cargo run --bin hydra-lab -- origin --listen 127.0.0.1:4000
+    cargo run --bin hydra-lab -- origin --listen 127.0.0.1:4000 --messages 4
 
 Start a relay in terminal 2:
 
-    cargo run --bin hydra-lab -- relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000
+    cargo run --bin hydra-lab -- relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4
 
 Send a payload from terminal 3:
 
-    cargo run --bin hydra-lab -- send --connect 127.0.0.1:4001 --payload "hello Hydra"
+    cargo run --bin hydra-lab -- send --connect 127.0.0.1:4001 --payload "hello Hydra" --messages 4
 
-The origin and relay serve one connection and then exit. Start them again for another run. The sender reports PASS only when the returned bytes exactly match the original payload.
+Each origin and relay serves one TCP session and then exits. Use the same --messages value for every node; it defaults to 1 and is capped at 64 frames per session. The relay reuses one upstream TCP connection for all frames. The sender reports PASS only when every echoed frame exactly matches the original payload.
 
-To test a binary file, use the sender's `--file ./payload.bin` option instead of `--payload`.
+To test a binary file, use the sender's `--file ./payload.bin` option instead of `--payload`. Multi-message CLI sessions repeat the selected file or text payload; the automated test also covers distinct binary frames.
 
 ## Experiment guarantees and limits
 

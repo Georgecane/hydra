@@ -1,6 +1,6 @@
 use hydra::transport::{
-    checksum, send_payload, serve_once, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
-    MAX_PAYLOAD_BYTES,
+    checksum, send_session, serve_session, Status, DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
@@ -82,15 +82,16 @@ fn run_graph_demo() -> Result<(), String> {
 
 fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), String> {
     let allowed: &[&str] = if is_relay {
-        &["listen", "upstream", "timeout-ms", "max-bytes"]
+        &["listen", "upstream", "timeout-ms", "max-bytes", "messages"]
     } else {
-        &["listen", "timeout-ms", "max-bytes"]
+        &["listen", "timeout-ms", "max-bytes", "messages"]
     };
     ensure_keys(options, allowed)?;
 
     let listen = parse_loopback_addr(required(options, "listen")?, "listen")?;
     let timeout = parse_timeout(options)?;
     let max_bytes = parse_max_bytes(options)?;
+    let max_messages = parse_messages(options)?;
     let upstream = if is_relay {
         Some(parse_loopback_addr(
             required(options, "upstream")?,
@@ -109,11 +110,11 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
         .flush()
         .map_err(|error| format!("flush readiness notification: {error}"))?;
 
-    let report = serve_once(&listener, upstream, max_bytes, timeout)
-        .map_err(|error| format!("serve one connection: {error}"))?;
+    let report = serve_session(&listener, upstream, max_bytes, timeout, max_messages)
+        .map_err(|error| format!("serve session: {error}"))?;
     println!(
-        "RESULT status={} bytes={} relayed={}",
-        report.status, report.bytes_received, report.relayed
+        "RESULT status={} bytes={} messages={} relayed={}",
+        report.status, report.bytes_received, report.messages_processed, report.relayed
     );
 
     if report.status != Status::Ok {
@@ -125,7 +126,7 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
 fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     ensure_keys(
         options,
-        &["connect", "timeout-ms", "max-bytes", "payload", "file"],
+        &["connect", "timeout-ms", "max-bytes", "payload", "file", "messages"],
     )?;
     if options.contains_key("payload") && options.contains_key("file") {
         return Err("choose either --payload or --file, not both".to_owned());
@@ -134,6 +135,7 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     let address = parse_loopback_addr(required(options, "connect")?, "connect")?;
     let timeout = parse_timeout(options)?;
     let max_bytes = parse_max_bytes(options)?;
+    let max_messages = parse_messages(options)?;
     let payload = if let Some(path) = options.get("file") {
         fs::read(path).map_err(|error| format!("read payload file {path:?}: {error}"))?
     } else if let Some(text) = options.get("payload") {
@@ -142,19 +144,32 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
         b"Hydra local transport test".to_vec()
     };
 
-    let response =
-        send_payload(address, &payload, max_bytes, timeout).map_err(|error| error.to_string())?;
-    if response.status != Status::Ok {
-        return Err(format!("remote node returned {}", response.status));
+    let payloads = vec![payload; max_messages];
+    let responses = send_session(address, &payloads, max_bytes, timeout)
+        .map_err(|error| error.to_string())?;
+
+    for (index, response) in responses.iter().enumerate() {
+        if response.status != Status::Ok {
+            return Err(format!("message {index} returned {}", response.status));
+        }
+        if response.payload != payloads[index] {
+            return Err(format!("integrity check failed for message {index}"));
+        }
     }
-    if response.payload != payload {
-        return Err("integrity check failed: echoed payload differs from the original".to_owned());
+    if responses.len() != payloads.len() {
+        return Err(format!(
+            "session ended early: expected {} responses, received {}",
+            payloads.len(),
+            responses.len()
+        ));
     }
 
+    let total_bytes: usize = responses.iter().map(|response| response.payload.len()).sum();
     println!(
-        "PASS status=Ok bytes={} checksum={:08x} timeout_ms={}",
-        response.payload.len(),
-        checksum(&response.payload),
+        "PASS status=Ok messages={} bytes={} checksum_last={:08x} timeout_ms={}",
+        responses.len(),
+        total_bytes,
+        checksum(&responses.last().expect("non-empty session").payload),
         timeout.as_millis()
     );
     Ok(())
@@ -226,6 +241,19 @@ fn parse_timeout(options: &HashMap<String, String>) -> Result<Duration, String> 
     Ok(Duration::from_millis(millis))
 }
 
+fn parse_messages(options: &HashMap<String, String>) -> Result<usize, String> {
+    let value = match options.get("messages") {
+        Some(value) => value
+            .parse::<usize>()
+            .map_err(|error| format!("invalid --messages value {value:?}: {error}"))?,
+        None => 1,
+    };
+    if !(1..=MAX_MESSAGES_PER_SESSION).contains(&value) {
+        return Err(format!("--messages must be between 1 and {MAX_MESSAGES_PER_SESSION}"));
+    }
+    Ok(value)
+}
+
 fn parse_max_bytes(options: &HashMap<String, String>) -> Result<usize, String> {
     let value = match options.get("max-bytes") {
         Some(value) => value
@@ -246,12 +274,12 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  hydra-lab");
-    println!("  hydra-lab origin --listen 127.0.0.1:4000");
-    println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000");
+    println!("  hydra-lab origin --listen 127.0.0.1:4000 --messages 4");
+    println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --payload 'hello Hydra'");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --file ./payload.bin");
     println!();
     println!("Each origin or relay serves one client connection and exits.");
-    println!("Optional flags: --timeout-ms N --max-bytes N");
+    println!("Optional flags: --timeout-ms N --max-bytes N --messages N (1..={MAX_MESSAGES_PER_SESSION})");
     println!("Only loopback addresses are accepted. CRC-32 detects corruption; it is not authentication.");
 }

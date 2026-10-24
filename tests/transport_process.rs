@@ -1,4 +1,6 @@
-use hydra::transport::{send_payload, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS};
+use hydra::transport::{
+    send_payload, send_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
+};
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -55,8 +57,15 @@ fn free_loopback_address() -> SocketAddr {
 
 #[test]
 fn three_process_route_transfers_binary_payload_through_relay() {
-    let mut origin =
-        RunningServer::start(&["origin", "--listen", "127.0.0.1:0", "--timeout-ms", "5000"]);
+    let mut origin = RunningServer::start(&[
+        "origin",
+        "--listen",
+        "127.0.0.1:0",
+        "--timeout-ms",
+        "5000",
+        "--messages",
+        "4",
+    ]);
     let upstream = origin.address.to_string();
     let mut relay = RunningServer::start(&[
         "relay",
@@ -66,25 +75,35 @@ fn three_process_route_transfers_binary_payload_through_relay() {
         &upstream,
         "--timeout-ms",
         "5000",
+        "--messages",
+        "4",
     ]);
 
-    let payload: Vec<u8> = (0..256 * 1024)
-        .map(|index| ((index * 31 + index / 7) % 256) as u8)
-        .collect();
-    let response = send_payload(
+    let payloads: Vec<Vec<u8>> = vec![
+        (0..256 * 1024)
+            .map(|index| ((index * 31 + index / 7) % 256) as u8)
+            .collect(),
+        (0..17 * 1024).map(|index| (index % 251) as u8).collect(),
+        vec![0, 255, 0, 1, 128, 10, 13],
+        b"fourth message in the same TCP session".to_vec(),
+    ];
+    let responses = send_session(
         relay.address,
-        &payload,
+        &payloads,
         DEFAULT_MAX_PAYLOAD_BYTES,
         Duration::from_millis(DEFAULT_TIMEOUT_MS),
     )
-    .expect("send over client -> relay -> origin");
+    .expect("send multiple frames over one client -> relay -> origin session");
 
-    assert_eq!(response.status, Status::Ok);
-    assert_eq!(
-        response.payload, payload,
-        "end-to-end payload must be byte-identical"
-    );
-    assert_eq!(response.checksum, hydra::transport::checksum(&payload));
+    assert_eq!(responses.len(), payloads.len());
+    for (response, payload) in responses.iter().zip(payloads.iter()) {
+        assert_eq!(response.status, Status::Ok);
+        assert_eq!(
+            &response.payload, payload,
+            "each session message must be byte-identical"
+        );
+        assert_eq!(response.checksum, hydra::transport::checksum(payload));
+    }
     relay.wait_success();
     origin.wait_success();
 }
