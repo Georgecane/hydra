@@ -259,13 +259,14 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
     }
 
     let bytes = input.as_bytes();
-    if bytes.len() % 4 != 0 {
+    let (blocks, remainder) = bytes.as_chunks::<4>();
+    if !remainder.is_empty() {
         return None;
     }
 
-    let mut output = Vec::with_capacity((bytes.len() / 4) * 3);
-    let block_count = bytes.len() / 4;
-    for (index, block) in bytes.chunks_exact(4).enumerate() {
+    let mut output = Vec::with_capacity(blocks.len() * 3);
+    let block_count = blocks.len();
+    for (index, block) in blocks.iter().enumerate() {
         let last = index + 1 == block_count;
         if block[0] == b'=' || block[1] == b'=' {
             return None;
