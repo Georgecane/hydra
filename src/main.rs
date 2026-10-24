@@ -3,7 +3,11 @@ use hydra::{LinkCapability, NodeId, TransportGraph};
 fn main() {
     let mut graph = TransportGraph::new();
     // A can use this service's ordinary API, but that alone does not make it a generic relay.
-    graph.add_link("user-a", "internal-service", LinkCapability::FixedServiceApi);
+    graph.add_link(
+        "user-a",
+        "internal-service",
+        LinkCapability::FixedServiceApi,
+    );
     graph.add_link(
         "internal-service",
         "public-origin",
@@ -15,7 +19,10 @@ fn main() {
 
     println!("Hydra transport feasibility lab");
     println!("Observed links: {}", graph.links().len());
-    println!("Links with unknown capability: {}", graph.unknown_link_count());
+    println!(
+        "Links with unknown capability: {}",
+        graph.unknown_link_count()
+    );
 
     match graph.arbitrary_relay_path(&source, &destination) {
         Some(path) => {
