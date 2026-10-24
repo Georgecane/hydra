@@ -7,9 +7,10 @@
 use crate::transport::{
     send_session as send_tcp_session, FrameError, Response, Status, MAX_PAYLOAD_BYTES,
 };
-use crate::LinkCapability;
+use crate::{Availability, LinkCapability, LinkQuality};
 use std::net::SocketAddr;
-use std::time::Duration;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PayloadCapability {
@@ -69,6 +70,9 @@ impl AdapterDescriptor {
 pub trait TransportAdapter: Send + Sync {
     fn descriptor(&self) -> &AdapterDescriptor;
 
+    /// Snapshot of recent observed quality. Missing or expired observations remain Unknown.
+    fn quality_snapshot(&self) -> LinkQuality;
+
     fn send_session(
         &self,
         destination: SocketAddr,
@@ -80,9 +84,10 @@ pub trait TransportAdapter: Send + Sync {
 
 /// Concrete TCP adapter reserved for the local experiment. Its transport implementation
 /// rejects non-loopback destinations; it is not an Internet-facing TCP tunnel.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct LoopbackTcpAdapter {
     descriptor: AdapterDescriptor,
+    quality: Mutex<LinkQuality>,
 }
 
 impl Default for LoopbackTcpAdapter {
@@ -93,27 +98,41 @@ impl Default for LoopbackTcpAdapter {
 
 impl LoopbackTcpAdapter {
     pub fn new() -> Self {
-        Self {
-            descriptor: AdapterDescriptor {
-                id: "loopback-tcp",
-                payload_capability: PayloadCapability::ArbitraryPayload,
-                authorization: AuthorizationStatus::ExplicitlyGranted,
-                enabled: true,
-                max_payload_bytes: MAX_PAYLOAD_BYTES,
-            },
-        }
+        Self::with_descriptor(AdapterDescriptor {
+            id: "loopback-tcp",
+            payload_capability: PayloadCapability::ArbitraryPayload,
+            authorization: AuthorizationStatus::ExplicitlyGranted,
+            enabled: true,
+            max_payload_bytes: MAX_PAYLOAD_BYTES,
+        })
     }
 
     /// Override metadata for policy and rejection tests. The underlying endpoint remains
     /// loopback-only TCP regardless of the supplied descriptor.
     pub fn with_descriptor(descriptor: AdapterDescriptor) -> Self {
-        Self { descriptor }
+        Self {
+            descriptor,
+            quality: Mutex::new(LinkQuality {
+                max_payload_bytes: descriptor.max_payload_bytes,
+                ..LinkQuality::default()
+            }),
+        }
     }
 }
 
 impl TransportAdapter for LoopbackTcpAdapter {
     fn descriptor(&self) -> &AdapterDescriptor {
         &self.descriptor
+    }
+
+    fn quality_snapshot(&self) -> LinkQuality {
+        let mut quality = self
+            .quality
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        quality.max_payload_bytes = self.descriptor.max_payload_bytes;
+        quality
     }
 
     fn send_session(
@@ -142,8 +161,51 @@ impl TransportAdapter for LoopbackTcpAdapter {
                 message: "adapter payload limit must be greater than zero".to_owned(),
             });
         }
+        if !destination.ip().is_loopback() {
+            return Err(FrameError {
+                status: Status::InvalidFrame,
+                message: "loopback TCP adapter refuses non-loopback destinations".to_owned(),
+            });
+        }
 
-        send_tcp_session(destination, payloads, limit, timeout)
+        let started = Instant::now();
+        let result = send_tcp_session(destination, payloads, limit, timeout);
+        let elapsed_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let mut quality = self
+            .quality
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        quality.max_payload_bytes = self.descriptor.max_payload_bytes;
+
+        match &result {
+            Ok(responses)
+                if !payloads.is_empty()
+                    && responses.len() == payloads.len()
+                    && responses.iter().all(|response| response.status == Status::Ok) =>
+            {
+                quality.record_success(Instant::now(), elapsed_ms);
+            }
+            Ok(responses)
+                if responses.iter().all(|response| {
+                    response.status == Status::InvalidFrame
+                        || response.status == Status::PayloadTooLarge
+                }) =>
+            {
+                // A peer's explicit validation response is not evidence that the link is down.
+                quality.availability = Availability::Unknown;
+                quality.observed_at = Some(Instant::now());
+            }
+            Err(error)
+                if error.status == Status::InvalidFrame
+                    || error.status == Status::PayloadTooLarge
+                    || error.status == Status::UpstreamRejected =>
+            {
+                // Local input/authorization rejection is not a transport health sample.
+            }
+            _ => quality.record_failure(Instant::now()),
+        }
+
+        result
     }
 }
 

@@ -216,11 +216,15 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
         .iter()
         .map(|response| response.payload.len())
         .sum();
+    let quality = adapter.quality_snapshot();
     println!(
-        "PASS status=Ok messages={} bytes={} checksum_last={:08x} timeout_ms={}",
+        "PASS status=Ok messages={} bytes={} checksum_last={:08x} latency_ms={} successes={} failures={} timeout_ms={}",
         responses.len(),
         total_bytes,
         checksum(&responses.last().expect("non-empty session").payload),
+        quality.latency_ms.unwrap_or(0),
+        quality.successes,
+        quality.failures,
         timeout.as_millis()
     );
     Ok(())

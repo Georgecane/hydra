@@ -42,11 +42,14 @@ A link has separate capability metadata and quality observations.
 - Latency is an optional observed millisecond estimate. Missing latency receives a conservative 1000 ms estimate.
 - Every edge declares its maximum payload size. An edge smaller than the request is excluded.
 - Success and failure counters affect the route penalty. The initial model uses a failure-rate penalty in milliseconds; no observations receive a neutral uncertainty penalty.
+- A completed successful local session updates an EWMA latency estimate, marks the link Available, increments successes, and resets the consecutive-failure count.
+- A failed local session increments failures. One consecutive failure makes availability Unknown; two or more mark the link Unavailable until a later success.
+- Availability observations expire after 30 seconds. Stale or missing timestamps are treated as Unknown.
 - Stable node-name tie-breaking makes equal-cost route choices deterministic.
 
-The planner uses only edges marked ArbitraryPayloadRelay by adapter policy. Fixed-service APIs, unknown capability, unknown availability, and unavailable edges cannot complete a generic payload route. The old arbitrary_relay_path method remains a topology-only query and deliberately does not claim that links are currently online.
+The planner uses only edges marked ArbitraryPayloadRelay by adapter policy. Fixed-service APIs, unknown capability, unknown or expired availability, and unavailable edges cannot complete a generic payload route. The old arbitrary_relay_path method remains a topology-only query and deliberately does not claim that links are currently online.
 
-These metrics are supplied by the experiment or tests. They are not automatically measured live yet, and a route score is not a guarantee of real-world performance.
+Loopback TCP records quality only in memory while its adapter instance exists. This is not persistent history or automatic external network measurement, and a route score is not a guarantee of real-world performance.
 
 ## Frame format
 

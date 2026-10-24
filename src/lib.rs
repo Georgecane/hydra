@@ -5,6 +5,9 @@ pub mod adapter;
 pub mod transport;
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::time::{Duration, Instant};
+
+pub const DEFAULT_LINK_QUALITY_TTL: Duration = Duration::from_secs(30);
 
 /// A node in the experiment graph. Nodes need not run Hydra.
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
@@ -39,12 +42,15 @@ pub enum Availability {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LinkQuality {
     pub availability: Availability,
-    /// Observed round-trip latency in milliseconds.
+    /// Observed round-trip latency in milliseconds (EWMA after multiple samples).
     pub latency_ms: Option<u64>,
     /// Largest single payload supported on this edge.
     pub max_payload_bytes: usize,
     pub successes: u64,
     pub failures: u64,
+    pub consecutive_failures: u32,
+    /// Monotonic timestamp of the latest completed transfer observation.
+    pub observed_at: Option<Instant>,
 }
 
 impl Default for LinkQuality {
@@ -55,11 +61,54 @@ impl Default for LinkQuality {
             max_payload_bytes: 0,
             successes: 0,
             failures: 0,
+            consecutive_failures: 0,
+            observed_at: None,
         }
     }
 }
 
 impl LinkQuality {
+    /// Record a fully successful transfer and update the latency estimate.
+    pub fn record_success(&mut self, observed_at: Instant, latency_ms: u64) {
+        let latency_ms = latency_ms.max(1);
+        self.latency_ms = Some(match self.latency_ms {
+            Some(previous) => previous
+                .saturating_mul(7)
+                .saturating_add(latency_ms)
+                .checked_div(8)
+                .unwrap_or(latency_ms)
+                .max(1),
+            None => latency_ms,
+        });
+        self.successes = self.successes.saturating_add(1);
+        self.consecutive_failures = 0;
+        self.availability = Availability::Available;
+        self.observed_at = Some(observed_at);
+    }
+
+    /// Record a failed transfer. One failure makes availability Unknown; two
+    /// consecutive failures mark the link Unavailable until a successful transfer.
+    pub fn record_failure(&mut self, observed_at: Instant) {
+        self.failures = self.failures.saturating_add(1);
+        self.consecutive_failures = self.consecutive_failures.saturating_add(1);
+        self.availability = if self.consecutive_failures >= 2 {
+            Availability::Unavailable
+        } else {
+            Availability::Unknown
+        };
+        self.observed_at = Some(observed_at);
+    }
+
+    /// Stale or missing observations never count as current availability evidence.
+    pub fn effective_availability(&self, now: Instant, max_age: Duration) -> Availability {
+        match self.observed_at {
+            Some(observed_at) if now.saturating_duration_since(observed_at) <= max_age => {
+                self.availability
+            }
+            _ => Availability::Unknown,
+        }
+    }
+
     /// Produces a conservative score in milliseconds from explicit observations.
     /// Unknown latency receives a 1000 ms estimate; failure history adds a penalty.
     fn estimated_cost_ms(&self) -> u64 {
@@ -232,6 +281,7 @@ impl TransportGraph {
             unvisited.insert(link.to.clone());
         }
 
+        let observed_now = Instant::now();
         let mut distances: HashMap<NodeId, u64> = HashMap::new();
         let mut previous: HashMap<NodeId, (NodeId, usize)> = HashMap::new();
         distances.insert(source.clone(), 0);
@@ -253,7 +303,10 @@ impl TransportGraph {
             for (index, link) in self.links.iter().enumerate() {
                 if link.from != current
                     || link.capability != LinkCapability::ArbitraryPayloadRelay
-                    || link.quality.availability != Availability::Available
+                    || link
+                        .quality
+                        .effective_availability(observed_now, DEFAULT_LINK_QUALITY_TTL)
+                        != Availability::Available
                     || link.quality.max_payload_bytes < required_payload_bytes
                     || !unvisited.contains(&link.to)
                 {
@@ -322,6 +375,8 @@ mod tests {
             max_payload_bytes,
             successes,
             failures,
+            consecutive_failures: 0,
+            observed_at: Some(Instant::now()),
         }
     }
 
@@ -424,13 +479,7 @@ mod tests {
             "source",
             "unknown",
             LinkCapability::ArbitraryPayloadRelay,
-            LinkQuality {
-                availability: Availability::Unknown,
-                latency_ms: Some(1),
-                max_payload_bytes: 4096,
-                successes: 20,
-                failures: 0,
-            },
+            quality(Availability::Unknown, 1, 4096, 20, 0),
         );
         graph.add_observed_link(
             "source",
@@ -501,6 +550,35 @@ mod tests {
                 NodeId::from("origin")
             ]
         );
+    }
+
+    #[test]
+    fn link_quality_expires_to_unknown_after_the_ttl() {
+        let mut quality = LinkQuality::default();
+        quality.max_payload_bytes = 4096;
+        let observed_at = Instant::now() - Duration::from_secs(31);
+        quality.record_success(observed_at, 25);
+        assert_eq!(
+            quality.effective_availability(Instant::now(), DEFAULT_LINK_QUALITY_TTL),
+            Availability::Unknown
+        );
+    }
+
+    #[test]
+    fn repeated_failures_mark_unavailable_and_success_restores_availability() {
+        let mut quality = LinkQuality::default();
+        quality.max_payload_bytes = 4096;
+        let start = Instant::now();
+        quality.record_failure(start);
+        assert_eq!(quality.availability, Availability::Unknown);
+        quality.record_failure(start + Duration::from_millis(1));
+        assert_eq!(quality.availability, Availability::Unavailable);
+        quality.record_success(start + Duration::from_millis(2), 100);
+        assert_eq!(quality.availability, Availability::Available);
+        assert_eq!(quality.consecutive_failures, 0);
+        assert_eq!(quality.successes, 1);
+        assert_eq!(quality.failures, 2);
+        assert_eq!(quality.latency_ms, Some(100));
     }
 
     #[test]

@@ -53,9 +53,9 @@ These flags are intended for the loopback test harness only. Configure one fault
 
 ## Route-scoring model
 
-The route planner accepts a link only when its arbitrary-payload capability is verified, availability is explicitly marked Available, and its payload limit covers the requested message. It ranks eligible paths by estimated latency plus a failure-history penalty. Edges without availability observations remain Unknown and are not chosen.
+The route planner accepts a link only when its arbitrary-payload capability is verified, its availability observation is fresh and marked Available, and its payload limit covers the requested message. It ranks eligible paths by estimated latency plus a failure-history penalty. A successful local transfer updates the loopback adapter's in-memory latency and success counters; failures update the failure history. Observations expire after 30 seconds, after which availability becomes Unknown.
 
-These are deterministic model inputs for tests, not live network measurements. Hydra does not currently probe external networks or infer that a third-party service can relay data.
+Metrics are held in memory only and are not persisted across runs. Hydra does not probe external networks or infer that a third-party service can relay data.
 
 ## Experiment guarantees and limits
 

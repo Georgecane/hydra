@@ -2,6 +2,7 @@ use hydra::adapter::{LoopbackTcpAdapter, TransportAdapter};
 use hydra::transport::{
     send_payload, send_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
 };
+use hydra::Availability;
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -103,6 +104,13 @@ fn three_process_route_transfers_binary_payload_through_relay() {
         .expect("send multiple frames over one client -> relay -> origin session");
 
     assert_eq!(responses.len(), payloads.len());
+    let quality = adapter.quality_snapshot();
+    assert_eq!(quality.availability, Availability::Available);
+    assert_eq!(quality.successes, 1);
+    assert_eq!(quality.consecutive_failures, 0);
+    assert!(quality.latency_ms.is_some());
+    assert!(quality.observed_at.is_some());
+
     for (response, payload) in responses.iter().zip(payloads.iter()) {
         assert_eq!(response.status, Status::Ok);
         assert_eq!(
