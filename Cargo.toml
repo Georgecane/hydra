@@ -1,0 +1,19 @@
+[package]
+name = "hydra"
+version = "0.1.0"
+edition = "2021"
+description = "A research lab for testing Hydra Meshnet transport assumptions"
+license = "GPL-3.0-only"
+repository = "https://github.com/Georgecane/hydra"
+
+[lib]
+name = "hydra"
+path = "src/lib.rs"
+
+[[bin]]
+name = "hydra-lab"
+path = "src/main.rs"
+
+[dependencies]
+
+[dev-dependencies]
