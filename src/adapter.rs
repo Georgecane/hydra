@@ -174,10 +174,7 @@ mod tests {
             adapter.descriptor().link_capability(),
             LinkCapability::ArbitraryPayloadRelay
         );
-        assert_eq!(
-            adapter.descriptor().max_payload_bytes,
-            MAX_PAYLOAD_BYTES
-        );
+        assert_eq!(adapter.descriptor().max_payload_bytes, MAX_PAYLOAD_BYTES);
     }
 
     #[test]
@@ -249,7 +246,10 @@ mod tests {
         graph.add_adapter_link("trusted", "uncertain", &uncertain);
         graph.add_link("uncertain", "origin", LinkCapability::ArbitraryPayloadRelay);
         assert!(graph
-            .arbitrary_relay_path(&crate::NodeId::from("source"), &crate::NodeId::from("origin"))
+            .arbitrary_relay_path(
+                &crate::NodeId::from("source"),
+                &crate::NodeId::from("origin")
+            )
             .is_none());
     }
 }
