@@ -554,8 +554,10 @@ mod tests {
 
     #[test]
     fn link_quality_expires_to_unknown_after_the_ttl() {
-        let mut quality = LinkQuality::default();
-        quality.max_payload_bytes = 4096;
+        let mut quality = LinkQuality {
+            max_payload_bytes: 4096,
+            ..LinkQuality::default()
+        };
         let observed_at = Instant::now() - Duration::from_secs(31);
         quality.record_success(observed_at, 25);
         assert_eq!(

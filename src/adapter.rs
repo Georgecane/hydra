@@ -126,11 +126,10 @@ impl TransportAdapter for LoopbackTcpAdapter {
     }
 
     fn quality_snapshot(&self) -> LinkQuality {
-        let mut quality = self
+        let mut quality = *self
             .quality
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .clone();
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         quality.max_payload_bytes = self.descriptor.max_payload_bytes;
         quality
     }
