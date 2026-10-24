@@ -181,7 +181,9 @@ impl TransportAdapter for LoopbackTcpAdapter {
             Ok(responses)
                 if !payloads.is_empty()
                     && responses.len() == payloads.len()
-                    && responses.iter().all(|response| response.status == Status::Ok) =>
+                    && responses
+                        .iter()
+                        .all(|response| response.status == Status::Ok) =>
             {
                 quality.record_success(Instant::now(), elapsed_ms);
             }
