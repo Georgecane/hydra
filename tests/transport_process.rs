@@ -275,7 +275,10 @@ fn relay_disconnect_mid_session_is_reported_to_client() {
         DEFAULT_MAX_PAYLOAD_BYTES,
         Duration::from_millis(1500),
     );
-    assert!(outcome.is_err(), "client must detect that the session ended early");
+    assert!(
+        outcome.is_err(),
+        "client must detect that the session ended early"
+    );
     relay.wait_success();
     origin.wait_success();
 }

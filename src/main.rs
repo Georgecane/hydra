@@ -320,9 +320,9 @@ fn parse_faults(
 
     let truncate_response_after_bytes = match options.get("truncate-response-bytes") {
         Some(value) => {
-            let bytes = value
-                .parse::<usize>()
-                .map_err(|error| format!("invalid --truncate-response-bytes value {value:?}: {error}"))?;
+            let bytes = value.parse::<usize>().map_err(|error| {
+                format!("invalid --truncate-response-bytes value {value:?}: {error}")
+            })?;
             if bytes == 0 || bytes > MAX_PAYLOAD_BYTES + 17 {
                 return Err(format!(
                     "--truncate-response-bytes must be between 1 and {}",
@@ -336,9 +336,9 @@ fn parse_faults(
 
     let disconnect_after_messages = match options.get("close-after-messages") {
         Some(value) => {
-            let count = value
-                .parse::<usize>()
-                .map_err(|error| format!("invalid --close-after-messages value {value:?}: {error}"))?;
+            let count = value.parse::<usize>().map_err(|error| {
+                format!("invalid --close-after-messages value {value:?}: {error}")
+            })?;
             if count == 0 || count >= max_messages {
                 return Err(
                     "--close-after-messages must be at least 1 and less than --messages"
