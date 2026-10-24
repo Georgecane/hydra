@@ -1,6 +1,6 @@
 use hydra::transport::{
-    checksum, send_session, serve_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
-    MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
+    checksum, send_session, serve_session_with_faults, FaultInjection, Status,
+    DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
@@ -82,9 +82,26 @@ fn run_graph_demo() -> Result<(), String> {
 
 fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), String> {
     let allowed: &[&str] = if is_relay {
-        &["listen", "upstream", "timeout-ms", "max-bytes", "messages"]
+        &[
+            "listen",
+            "upstream",
+            "timeout-ms",
+            "max-bytes",
+            "messages",
+            "delay-ms",
+            "truncate-response-bytes",
+            "close-after-messages",
+        ]
     } else {
-        &["listen", "timeout-ms", "max-bytes", "messages"]
+        &[
+            "listen",
+            "timeout-ms",
+            "max-bytes",
+            "messages",
+            "delay-ms",
+            "truncate-response-bytes",
+            "close-after-messages",
+        ]
     };
     ensure_keys(options, allowed)?;
 
@@ -92,6 +109,7 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
     let timeout = parse_timeout(options)?;
     let max_bytes = parse_max_bytes(options)?;
     let max_messages = parse_messages(options)?;
+    let faults = parse_faults(options, max_messages)?;
     let upstream = if is_relay {
         Some(parse_loopback_addr(
             required(options, "upstream")?,
@@ -110,11 +128,31 @@ fn run_server(options: &HashMap<String, String>, is_relay: bool) -> Result<(), S
         .flush()
         .map_err(|error| format!("flush readiness notification: {error}"))?;
 
-    let report = serve_session(&listener, upstream, max_bytes, timeout, max_messages)
-        .map_err(|error| format!("serve session: {error}"))?;
+    let report = serve_session_with_faults(
+        &listener,
+        upstream,
+        max_bytes,
+        timeout,
+        max_messages,
+        &faults,
+    )
+    .map_err(|error| format!("serve session: {error}"))?;
+    let fault_label = if !faults.response_delay.is_zero() {
+        format!("delay-{}ms", faults.response_delay.as_millis())
+    } else if let Some(bytes) = faults.truncate_response_after_bytes {
+        format!("truncate-after-{bytes}-bytes")
+    } else if let Some(count) = faults.disconnect_after_messages {
+        format!("disconnect-after-{count}-messages")
+    } else {
+        "none".to_owned()
+    };
     println!(
-        "RESULT status={} bytes={} messages={} relayed={}",
-        report.status, report.bytes_received, report.messages_processed, report.relayed
+        "RESULT status={} bytes={} messages={} relayed={} fault={}",
+        report.status,
+        report.bytes_received,
+        report.messages_processed,
+        report.relayed,
+        fault_label
     );
 
     if report.status != Status::Ok {
@@ -266,6 +304,73 @@ fn parse_messages(options: &HashMap<String, String>) -> Result<usize, String> {
     Ok(value)
 }
 
+fn parse_faults(
+    options: &HashMap<String, String>,
+    max_messages: usize,
+) -> Result<FaultInjection, String> {
+    let delay_ms = match options.get("delay-ms") {
+        Some(value) => value
+            .parse::<u64>()
+            .map_err(|error| format!("invalid --delay-ms value {value:?}: {error}"))?,
+        None => 0,
+    };
+    if delay_ms > 60_000 {
+        return Err("--delay-ms must be between 0 and 60000".to_owned());
+    }
+
+    let truncate_response_after_bytes = match options.get("truncate-response-bytes") {
+        Some(value) => {
+            let bytes = value
+                .parse::<usize>()
+                .map_err(|error| format!("invalid --truncate-response-bytes value {value:?}: {error}"))?;
+            if bytes == 0 || bytes > MAX_PAYLOAD_BYTES + 17 {
+                return Err(format!(
+                    "--truncate-response-bytes must be between 1 and {}",
+                    MAX_PAYLOAD_BYTES + 17
+                ));
+            }
+            Some(bytes)
+        }
+        None => None,
+    };
+
+    let disconnect_after_messages = match options.get("close-after-messages") {
+        Some(value) => {
+            let count = value
+                .parse::<usize>()
+                .map_err(|error| format!("invalid --close-after-messages value {value:?}: {error}"))?;
+            if count == 0 || count >= max_messages {
+                return Err(
+                    "--close-after-messages must be at least 1 and less than --messages"
+                        .to_owned(),
+                );
+            }
+            Some(count)
+        }
+        None => None,
+    };
+
+    let mut enabled_faults = 0;
+    if delay_ms > 0 {
+        enabled_faults += 1;
+    }
+    if truncate_response_after_bytes.is_some() {
+        enabled_faults += 1;
+    }
+    if disconnect_after_messages.is_some() {
+        enabled_faults += 1;
+    }
+    if enabled_faults > 1 {
+        return Err("configure only one fault-injection option per node".to_owned());
+    }
+
+    Ok(FaultInjection {
+        response_delay: Duration::from_millis(delay_ms),
+        truncate_response_after_bytes,
+        disconnect_after_messages,
+    })
+}
+
 fn parse_max_bytes(options: &HashMap<String, String>) -> Result<usize, String> {
     let value = match options.get("max-bytes") {
         Some(value) => value
@@ -287,11 +392,15 @@ fn print_help() {
     println!("Commands:");
     println!("  hydra-lab");
     println!("  hydra-lab origin --listen 127.0.0.1:4000 --messages 4");
+    println!("  hydra-lab origin --listen 127.0.0.1:4000 --messages 1 --delay-ms 700");
+    println!("  hydra-lab origin --listen 127.0.0.1:4000 --messages 1 --truncate-response-bytes 7");
     println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4");
+    println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4 --close-after-messages 2");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --payload 'hello Hydra'");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --file ./payload.bin");
     println!();
     println!("Each origin or relay serves one client connection and exits.");
     println!("Optional flags: --timeout-ms N --max-bytes N --messages N (1..={MAX_MESSAGES_PER_SESSION})");
+    println!("Fault-injection flags (local tests only; choose one): --delay-ms N, --truncate-response-bytes N, --close-after-messages N");
     println!("Only loopback addresses are accepted. CRC-32 detects corruption; it is not authentication.");
 }

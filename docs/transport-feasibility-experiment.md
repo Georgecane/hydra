@@ -2,9 +2,9 @@
 
 ## Question
 
-Can a client send arbitrary bytes through a controlled intermediate node to a controlled origin, and can the test reliably detect blocked, corrupted, oversized, or unavailable paths?
+Can a client send arbitrary bytes through a controlled intermediate node to a controlled origin, and can the test reliably detect blocked, corrupted, oversized, delayed, truncated, or prematurely disconnected paths?
 
-This milestone demonstrates the data plane over a known, controlled TCP path. Only after this baseline is stable should Hydra investigate whether any real-world transport adapter is documented, authorized, and technically able to provide equivalent forwarding.
+This milestone demonstrates the data plane over a known, controlled TCP path, then injects deliberate failures to verify that no failure is reported as a successful transfer.
 
 ## Scope and boundaries
 
@@ -13,6 +13,7 @@ This milestone demonstrates the data plane over a known, controlled TCP path. On
 - It does not capture traffic, scan networks, log into third-party apps, or tunnel through third-party infrastructure.
 - An application session or API connection does not establish permission or ability to forward arbitrary data.
 - CRC-32 detects accidental corruption only. It is not authentication, encryption, or active-attacker protection.
+- Exactly one fault-injection option may be active on a node during a run.
 
 ## Topology
 
@@ -55,6 +56,18 @@ Send four frames:
 
 All three commands must use the same message count. The integration test uses separate client, relay, and origin processes and transfers several different binary payloads over a single client-to-relay socket and a reused relay-to-origin socket.
 
+## Fault-injection matrix
+
+Fault injection is opt-in, local-only, and intended for tests. Use only one fault-injection flag per node.
+
+| Experiment | Setup | Expected observable result |
+|---|---|---|
+| Delayed response | Origin: --messages 1 --delay-ms 700 --timeout-ms 2000; relay: --messages 1 --timeout-ms 200 | Relay returns Timeout; client must not report success |
+| Truncated upstream response | Origin: --messages 1 --truncate-response-bytes 7; relay: --messages 1 | Relay detects an incomplete response frame and returns UpstreamUnavailable |
+| Mid-session disconnect | Origin: --messages 2; relay: --messages 4 --close-after-messages 2; client sends four frames | Client returns an error instead of accepting a shortened session as successful |
+
+The automated tests use separate processes and loopback sockets. Each fault has a bounded timeout so test runs cannot wait indefinitely.
+
 ## Procedure and success criteria
 
 1. Verify that the graph model rejects service-specific API links and unknown links as generic relays.
@@ -62,13 +75,14 @@ All three commands must use the same message count. The integration test uses se
 3. Verify per-frame checksums and exact byte equality for every response.
 4. Verify that invalid markers, truncated frames, checksum mismatches, and over-limit lengths are rejected.
 5. Verify that unavailable upstreams produce a framed error rather than a false success.
-6. Verify that non-loopback destinations are refused by the experiment harness.
-7. Run formatting, Clippy with warnings denied, and all unit/integration tests.
+6. Verify that delayed, truncated, and prematurely disconnected sessions are reported as failures.
+7. Verify that non-loopback destinations are refused by the experiment harness.
+8. Run formatting, Clippy with warnings denied, and all unit/integration tests.
 
 ## Current limits
 
-This local protocol validates data transport through an explicitly configured relay. It does not prove that any third-party app or restricted network can relay arbitrary data, or that such use is authorized. Every candidate transport requires a separate protocol, permission, and feasibility review.
+This local protocol validates data transport through an explicitly configured relay and verifies selected failure modes. It does not prove that any third-party app or restricted network can relay arbitrary data, or that such use is authorized. Every candidate transport requires a separate protocol, permission, and feasibility review.
 
 ## Next milestone
 
-Add controlled fault injection for delayed responses, upstream truncation, and relay termination during a transfer. Verify that failures are reported distinctly and cannot be mistaken for successful payload delivery. Then define a transport-adapter interface that records relay capability, authorization, reliability, and restrictions.
+Add a reusable transport-adapter trait and an in-memory fault model so link capability, authorization, reliability, and restrictions are represented explicitly. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.

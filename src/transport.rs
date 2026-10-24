@@ -3,7 +3,7 @@
 
 use std::fmt;
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{Shutdown, SocketAddr, TcpListener, TcpStream};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -58,6 +58,15 @@ pub struct ServerReport {
     pub bytes_received: usize,
     pub messages_processed: usize,
     pub relayed: bool,
+}
+
+/// Explicit fault injection for loopback-only experiments.
+/// Configure one fault at a time to keep results deterministic.
+#[derive(Clone, Debug, Default)]
+pub struct FaultInjection {
+    pub response_delay: Duration,
+    pub truncate_response_after_bytes: Option<usize>,
+    pub disconnect_after_messages: Option<usize>,
 }
 #[derive(Debug)]
 pub struct FrameError {
@@ -311,12 +320,45 @@ pub fn serve_session(
     timeout: Duration,
     max_messages: usize,
 ) -> io::Result<ServerReport> {
+    serve_session_with_faults(
+        listener,
+        upstream,
+        limit,
+        timeout,
+        max_messages,
+        &FaultInjection::default(),
+    )
+}
+
+/// Serve a session with an optional, single deterministic fault injection.
+pub fn serve_session_with_faults(
+    listener: &TcpListener,
+    upstream: Option<SocketAddr>,
+    limit: usize,
+    timeout: Duration,
+    max_messages: usize,
+    faults: &FaultInjection,
+) -> io::Result<ServerReport> {
     validate_limit(limit)?;
     if !(1..=MAX_MESSAGES_PER_SESSION).contains(&max_messages) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("messages per session must be 1..={MAX_MESSAGES_PER_SESSION}"),
         ));
+    }
+    if faults.truncate_response_after_bytes == Some(0) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "truncate-response-bytes must be greater than zero",
+        ));
+    }
+    if let Some(count) = faults.disconnect_after_messages {
+        if count == 0 || count >= max_messages {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "close-after-messages must be less than the configured session message count",
+            ));
+        }
     }
     validate_loopback(listener.local_addr()?, "listener")?;
     if let Some(address) = upstream {
@@ -387,7 +429,41 @@ pub fn serve_session(
             }
         };
 
+        if !faults.response_delay.is_zero() {
+            thread::sleep(faults.response_delay);
+        }
+
+        if let Some(truncate_after) = faults.truncate_response_after_bytes {
+            let mut encoded = Vec::new();
+            write_response(&mut encoded, response.status, &response.payload)?;
+            if truncate_after >= encoded.len() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "truncate-response-bytes must be smaller than the encoded response",
+                ));
+            }
+            client.write_all(&encoded[..truncate_after])?;
+            client.shutdown(Shutdown::Write)?;
+            return Ok(ServerReport {
+                status: Status::InvalidFrame,
+                bytes_received,
+                messages_processed,
+                relayed: upstream.is_some(),
+            });
+        }
+
         write_response(&mut client, response.status, &response.payload)?;
+
+        if faults.disconnect_after_messages == Some(messages_processed) {
+            client.shutdown(Shutdown::Both)?;
+            return Ok(ServerReport {
+                status: Status::Ok,
+                bytes_received,
+                messages_processed,
+                relayed: upstream.is_some(),
+            });
+        }
+
         if response.status != Status::Ok {
             return Ok(ServerReport {
                 status: response.status,
