@@ -113,6 +113,18 @@ The automated tests use separate processes and loopback sockets. Each fault has 
 
 This local protocol validates data transport through an explicitly configured relay and verifies selected failure modes. It does not prove that any third-party app or restricted network can relay arbitrary data, or that such use is authorized. Every candidate transport requires a separate protocol, permission, and feasibility review.
 
+## Application-message bridge probe
+
+The service bridge module tests a separate hypothesis from the generic TCP lab: can a documented, explicitly authorized, bidirectional application-message API carry a bounded binary payload in a user-controlled field and return it intact?
+
+The prototype defines a fixed envelope with protocol version, session identifier, zero-based chunk sequence, total chunk count, Base64 payload, and CRC-32 checksum. It limits each session to 1 MiB and 4096 messages. The configured field limit applies to encoded payload characters; the real adapter must separately account for the complete API request size, rate limits, encoding rules, and response behavior.
+
+The channel profile is rejected before sending unless the adapter is enabled, the API is documented, authorization is explicitly granted, both directions are available, a user-controlled payload field exists, and that field can hold at least one Base64 quantum. Responses with a wrong version, session, sequence, chunk count, Base64 encoding, checksum, or payload are rejected.
+
+Current verification uses only a mock channel in unit tests. The tests cover chunked binary round trips and rejection of unknown authorization, one-way APIs, reordered responses, corrupt checksums, invalid payload encoding, missing capabilities, and oversized data.
+
+This is not yet a third-party service adapter, a multi-hop network route, or evidence that a service like Rubika accepts arbitrary payloads. An ordinary app session does not provide arbitrary relay capability by itself. Any real adapter must use a documented interface, remain within its authorized behavior, and prove end-to-end return traffic before it can be considered further.
+
 ## Next milestone
 
-Collect quality observations from completed local transfers, define when an observation expires, and update availability/failure history without treating stale or missing measurements as proof of connectivity. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.
+Run the mock conformance suite in CI, then design an isolated integration test against a deliberately controlled message API that implements the same documented contract. Do not enable a real-world adapter or classify a fixed-service API as a generic relay unless independent experiments prove the exact capability and authorization required.

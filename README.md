@@ -13,6 +13,7 @@ The repository now contains five experimental components:
 3. Fault injection for delayed replies, truncated response frames, and deliberate mid-session disconnects.
 4. A transport-adapter contract requiring explicit payload-capability and authorization metadata.
 5. A scored route planner that considers observed availability, latency, payload limits, and failure history.
+6. An application-message bridge probe with Base64 chunking, session/order checks, checksums, and a mock-channel test suite. No live third-party adapter is included.
 
 The TCP lab is loopback-only and does not connect to external hosts or third-party applications.
 
@@ -70,7 +71,7 @@ Metrics are held in memory only and are not persisted across runs. Hydra does no
 - Fixed-service APIs, unknown capabilities, denied permissions, and disabled adapters cannot create generic-relay edges.
 - This milestone does not prove that any third-party service or restricted network can relay arbitrary data.
 
-See the transport feasibility experiment in docs/transport-feasibility-experiment.md for the test matrix and next steps.
+See docs/transport-feasibility-experiment.md for both the loopback TCP tests and the application-message bridge probe. The bridge probe uses a mock channel only; passing it proves the framing code works, not that any real service can carry Hydra traffic.
 
 ## License
 

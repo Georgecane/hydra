@@ -2,6 +2,7 @@
 //! All current executable transport experiments are restricted to local loopback endpoints.
 
 pub mod adapter;
+pub mod service_bridge;
 pub mod transport;
 
 use std::collections::{HashMap, HashSet, VecDeque};
