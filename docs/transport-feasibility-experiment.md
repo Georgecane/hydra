@@ -34,6 +34,20 @@ The adapter contract separates connectivity from the permission and capability t
 
 The CLI sender and integration test use the LoopbackTcpAdapter through the common TransportAdapter interface. Metadata policy tests verify that an adapter without explicit authorization cannot open a route.
 
+## Route scoring and observed quality
+
+A link has separate capability metadata and quality observations.
+
+- Availability is Available, Unavailable, or Unknown. Only Available edges can be selected by the scored planner.
+- Latency is an optional observed millisecond estimate. Missing latency receives a conservative 1000 ms estimate.
+- Every edge declares its maximum payload size. An edge smaller than the request is excluded.
+- Success and failure counters affect the route penalty. The initial model uses a failure-rate penalty in milliseconds; no observations receive a neutral uncertainty penalty.
+- Stable node-name tie-breaking makes equal-cost route choices deterministic.
+
+The planner uses only edges marked ArbitraryPayloadRelay by adapter policy. Fixed-service APIs, unknown capability, unknown availability, and unavailable edges cannot complete a generic payload route. The old arbitrary_relay_path method remains a topology-only query and deliberately does not claim that links are currently online.
+
+These metrics are supplied by the experiment or tests. They are not automatically measured live yet, and a route score is not a guarantee of real-world performance.
+
 ## Frame format
 
 Request frame:
@@ -98,4 +112,4 @@ This local protocol validates data transport through an explicitly configured re
 
 ## Next milestone
 
-Add adapter registration and route scoring based on observed availability, latency, payload limits, and repeated success/failure. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.
+Collect quality observations from completed local transfers, define when an observation expires, and update availability/failure history without treating stale or missing measurements as proof of connectivity. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.

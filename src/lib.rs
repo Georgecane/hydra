@@ -1,5 +1,5 @@
-//! Hydra's first experiment: distinguish network reachability from relay capability.
-//! This is a local simulator only; it does not inspect or tunnel through third-party services.
+//! Hydra graph model, adapter policy, and conservative route planning.
+//! All current executable transport experiments are restricted to local loopback endpoints.
 
 pub mod adapter;
 pub mod transport;
@@ -27,15 +27,75 @@ pub enum LinkCapability {
     Unknown,
 }
 
-/// A directed, observed relationship between two nodes.
+/// Observed availability for route scoring. Unknown is never treated as available.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Availability {
+    Available,
+    Unavailable,
+    Unknown,
+}
+
+/// Route-scoring evidence attached to a directed link.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct LinkQuality {
+    pub availability: Availability,
+    /// Observed round-trip latency in milliseconds.
+    pub latency_ms: Option<u64>,
+    /// Largest single payload supported on this edge.
+    pub max_payload_bytes: usize,
+    pub successes: u64,
+    pub failures: u64,
+}
+
+impl Default for LinkQuality {
+    fn default() -> Self {
+        Self {
+            availability: Availability::Unknown,
+            latency_ms: None,
+            max_payload_bytes: 0,
+            successes: 0,
+            failures: 0,
+        }
+    }
+}
+
+impl LinkQuality {
+    /// Produces a conservative score in milliseconds from explicit observations.
+    /// Unknown latency receives a 1000 ms estimate; failure history adds a penalty.
+    fn estimated_cost_ms(&self) -> u64 {
+        let latency = self.latency_ms.unwrap_or(1000).max(1);
+        let trials = self.successes.saturating_add(self.failures);
+        let failure_rate_per_mille = if trials == 0 {
+            250
+        } else {
+            self.failures
+                .saturating_mul(1000)
+                .checked_div(trials)
+                .unwrap_or(1000)
+                .min(1000)
+        };
+        latency.saturating_add(failure_rate_per_mille.saturating_mul(5))
+    }
+}
+
+/// A directed relationship between two nodes, with capability and observed quality.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Link {
     pub from: NodeId,
     pub to: NodeId,
     pub capability: LinkCapability,
+    pub quality: LinkQuality,
 }
 
-/// Graph used by the feasibility experiment.
+/// Result of the best-path search, including its estimated cost and bottleneck size.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RoutePlan {
+    pub nodes: Vec<NodeId>,
+    pub estimated_cost_ms: u64,
+    pub bottleneck_payload_bytes: usize,
+}
+
+/// Directed graph used by the feasibility experiment and route planner.
 #[derive(Clone, Debug, Default)]
 pub struct TransportGraph {
     links: Vec<Link>,
@@ -46,36 +106,59 @@ impl TransportGraph {
         Self::default()
     }
 
+    /// Add a link whose live availability and quality have not yet been observed.
     pub fn add_link(
         &mut self,
         from: impl Into<NodeId>,
         to: impl Into<NodeId>,
         capability: LinkCapability,
     ) {
+        self.add_observed_link(from, to, capability, LinkQuality::default());
+    }
+
+    pub fn add_observed_link(
+        &mut self,
+        from: impl Into<NodeId>,
+        to: impl Into<NodeId>,
+        capability: LinkCapability,
+        quality: LinkQuality,
+    ) {
         self.links.push(Link {
             from: from.into(),
             to: to.into(),
             capability,
+            quality,
         });
     }
 
-    /// Add a graph edge using an adapter's declared capability and authorization.
-    /// Unverified or unauthorized adapters cannot create generic-relay edges.
+    /// Add an adapter edge based on its capability and authorization metadata.
+    /// Its availability stays Unknown until a separate observation is recorded.
     pub fn add_adapter_link(
         &mut self,
         from: impl Into<NodeId>,
         to: impl Into<NodeId>,
         adapter: &dyn crate::adapter::TransportAdapter,
     ) {
-        self.add_link(from, to, adapter.descriptor().link_capability());
+        self.add_observed_adapter_link(from, to, adapter, LinkQuality::default());
+    }
+
+    /// Add an adapter edge with explicit, externally collected quality observations.
+    pub fn add_observed_adapter_link(
+        &mut self,
+        from: impl Into<NodeId>,
+        to: impl Into<NodeId>,
+        adapter: &dyn crate::adapter::TransportAdapter,
+        quality: LinkQuality,
+    ) {
+        self.add_observed_link(from, to, adapter.descriptor().link_capability(), quality);
     }
 
     pub fn links(&self) -> &[Link] {
         &self.links
     }
 
-    /// Finds a path only across links verified to relay arbitrary payloads.
-    /// Fixed-service and unknown links are never treated as generic tunnels.
+    /// Finds any path using only capability-verified arbitrary-payload links.
+    /// This is a topology query and intentionally does not claim the links are online.
     pub fn arbitrary_relay_path(
         &self,
         source: &NodeId,
@@ -123,6 +206,97 @@ impl TransportGraph {
         None
     }
 
+    /// Find the least-cost route across observed, available, verified relay links.
+    /// Edges that are Unknown, Unavailable, too small for the payload, or not
+    /// authorized for arbitrary payloads are excluded.
+    pub fn best_relay_path(
+        &self,
+        source: &NodeId,
+        destination: &NodeId,
+        required_payload_bytes: usize,
+    ) -> Option<RoutePlan> {
+        if source == destination {
+            return Some(RoutePlan {
+                nodes: vec![source.clone()],
+                estimated_cost_ms: 0,
+                bottleneck_payload_bytes: usize::MAX,
+            });
+        }
+        if required_payload_bytes == 0 {
+            return None;
+        }
+
+        let mut unvisited: HashSet<NodeId> = HashSet::from([source.clone(), destination.clone()]);
+        for link in &self.links {
+            unvisited.insert(link.from.clone());
+            unvisited.insert(link.to.clone());
+        }
+
+        let mut distances: HashMap<NodeId, u64> = HashMap::new();
+        let mut previous: HashMap<NodeId, (NodeId, usize)> = HashMap::new();
+        distances.insert(source.clone(), 0);
+
+        loop {
+            let current = unvisited
+                .iter()
+                .filter_map(|node| distances.get(node).map(|cost| (node.clone(), *cost)))
+                .min_by_key(|(node, cost)| (*cost, node.0.clone()));
+
+            let Some((current, current_cost)) = current else {
+                break;
+            };
+            unvisited.remove(&current);
+            if current == *destination {
+                break;
+            }
+
+            for (index, link) in self.links.iter().enumerate() {
+                if link.from != current
+                    || link.capability != LinkCapability::ArbitraryPayloadRelay
+                    || link.quality.availability != Availability::Available
+                    || link.quality.max_payload_bytes < required_payload_bytes
+                    || !unvisited.contains(&link.to)
+                {
+                    continue;
+                }
+
+                let candidate = current_cost.saturating_add(link.quality.estimated_cost_ms());
+                let improves = distances
+                    .get(&link.to)
+                    .is_none_or(|existing| candidate < *existing);
+                if improves {
+                    distances.insert(link.to.clone(), candidate);
+                    previous.insert(link.to.clone(), (current.clone(), index));
+                }
+            }
+        }
+
+        let total_cost = *distances.get(destination)?;
+        let mut nodes = vec![destination.clone()];
+        let mut edge_indices = Vec::new();
+        let mut cursor = destination.clone();
+        while cursor != *source {
+            let (parent, edge_index) = previous.get(&cursor)?.clone();
+            nodes.push(parent.clone());
+            edge_indices.push(edge_index);
+            cursor = parent;
+        }
+        nodes.reverse();
+        edge_indices.reverse();
+
+        let bottleneck_payload_bytes = edge_indices
+            .iter()
+            .map(|index| self.links[*index].quality.max_payload_bytes)
+            .min()
+            .unwrap_or(usize::MAX);
+
+        Some(RoutePlan {
+            nodes,
+            estimated_cost_ms: total_cost,
+            bottleneck_payload_bytes,
+        })
+    }
+
     pub fn unknown_link_count(&self) -> usize {
         self.links
             .iter()
@@ -134,6 +308,22 @@ impl TransportGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn quality(
+        availability: Availability,
+        latency_ms: u64,
+        max_payload_bytes: usize,
+        successes: u64,
+        failures: u64,
+    ) -> LinkQuality {
+        LinkQuality {
+            availability,
+            latency_ms: Some(latency_ms),
+            max_payload_bytes,
+            successes,
+            failures,
+        }
+    }
 
     #[test]
     fn fixed_service_api_is_not_a_generic_relay() {
@@ -188,5 +378,138 @@ mod tests {
             graph.arbitrary_relay_path(&source, &source),
             Some(vec![source])
         );
+    }
+
+    #[test]
+    fn best_route_prefers_the_lower_cost_available_path() {
+        let mut graph = TransportGraph::new();
+        graph.add_observed_link(
+            "source",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 900, 4096, 100, 0),
+        );
+        graph.add_observed_link(
+            "source",
+            "relay",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 20, 2048, 100, 0),
+        );
+        graph.add_observed_link(
+            "relay",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 30, 1024, 100, 0),
+        );
+
+        let plan = graph
+            .best_relay_path(&NodeId::from("source"), &NodeId::from("origin"), 512)
+            .unwrap();
+        assert_eq!(
+            plan.nodes,
+            vec![
+                NodeId::from("source"),
+                NodeId::from("relay"),
+                NodeId::from("origin")
+            ]
+        );
+        assert_eq!(plan.estimated_cost_ms, 50);
+        assert_eq!(plan.bottleneck_payload_bytes, 1024);
+    }
+
+    #[test]
+    fn best_route_excludes_unknown_unavailable_and_undersized_links() {
+        let mut graph = TransportGraph::new();
+        graph.add_observed_link(
+            "source",
+            "unknown",
+            LinkCapability::ArbitraryPayloadRelay,
+            LinkQuality {
+                availability: Availability::Unknown,
+                latency_ms: Some(1),
+                max_payload_bytes: 4096,
+                successes: 20,
+                failures: 0,
+            },
+        );
+        graph.add_observed_link(
+            "source",
+            "offline",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Unavailable, 1, 4096, 10, 10),
+        );
+        graph.add_observed_link(
+            "source",
+            "small",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 1, 8, 10, 0),
+        );
+        graph.add_observed_link(
+            "unknown",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 1, 4096, 10, 0),
+        );
+        graph.add_observed_link(
+            "offline",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 1, 4096, 10, 0),
+        );
+        graph.add_observed_link(
+            "small",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 1, 4096, 10, 0),
+        );
+
+        assert!(graph
+            .best_relay_path(&NodeId::from("source"), &NodeId::from("origin"), 16)
+            .is_none());
+    }
+
+    #[test]
+    fn repeated_failures_increase_path_cost() {
+        let mut graph = TransportGraph::new();
+        graph.add_observed_link(
+            "source",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 50, 4096, 0, 100),
+        );
+        graph.add_observed_link(
+            "source",
+            "relay",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 100, 4096, 100, 0),
+        );
+        graph.add_observed_link(
+            "relay",
+            "origin",
+            LinkCapability::ArbitraryPayloadRelay,
+            quality(Availability::Available, 100, 4096, 100, 0),
+        );
+
+        let plan = graph
+            .best_relay_path(&NodeId::from("source"), &NodeId::from("origin"), 1024)
+            .unwrap();
+        assert_eq!(
+            plan.nodes,
+            vec![
+                NodeId::from("source"),
+                NodeId::from("relay"),
+                NodeId::from("origin")
+            ]
+        );
+    }
+
+    #[test]
+    fn an_adapter_without_availability_observations_is_not_route_ready() {
+        let mut graph = TransportGraph::new();
+        let adapter = crate::adapter::LoopbackTcpAdapter::default();
+        graph.add_adapter_link("source", "origin", &adapter);
+        assert!(graph
+            .best_relay_path(&NodeId::from("source"), &NodeId::from("origin"), 1)
+            .is_none());
     }
 }

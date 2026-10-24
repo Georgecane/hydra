@@ -6,12 +6,13 @@ Hydra is experimental. It does not claim that ordinary app connections can autom
 
 ## Current milestone
 
-The repository now contains four experiments:
+The repository now contains five experimental components:
 
 1. A graph model that only recognizes edges with explicitly verified arbitrary-payload relay capability.
 2. A real TCP payload test using three locally controlled nodes: a client, a relay, and an echo origin.
 3. Fault injection for delayed replies, truncated response frames, and deliberate mid-session disconnects.
-4. A transport-adapter contract that requires explicit payload-capability and authorization metadata before routing can treat an adapter as a generic relay.
+4. A transport-adapter contract requiring explicit payload-capability and authorization metadata.
+5. A scored route planner that considers observed availability, latency, payload limits, and failure history.
 
 The TCP lab is loopback-only and does not connect to external hosts or third-party applications.
 
@@ -49,6 +50,12 @@ These flags are intended for the loopback test harness only. Configure one fault
 - Delayed origin: start the origin with --messages 1 --delay-ms 700 --timeout-ms 2000, then run the relay with --messages 1 --timeout-ms 200. The client should receive a Timeout response rather than a false success.
 - Truncated origin response: start the origin with --messages 1 --truncate-response-bytes 7. The relay should detect the incomplete frame and return UpstreamUnavailable.
 - Relay disconnect after two frames: set the origin to --messages 2 and the relay to --messages 4 --close-after-messages 2, then send four messages. The client must report that the session ended early.
+
+## Route-scoring model
+
+The route planner accepts a link only when its arbitrary-payload capability is verified, availability is explicitly marked Available, and its payload limit covers the requested message. It ranks eligible paths by estimated latency plus a failure-history penalty. Edges without availability observations remain Unknown and are not chosen.
+
+These are deterministic model inputs for tests, not live network measurements. Hydra does not currently probe external networks or infer that a third-party service can relay data.
 
 ## Experiment guarantees and limits
 
