@@ -142,9 +142,7 @@ pub fn round_trip_payload<C: ServiceMessageChannel>(
         .max_chunk_payload_bytes()
         .ok_or(BridgeError::Ineligible(BridgeBlocker::PayloadFieldTooSmall))?;
     if chunk_limit == 0 {
-        return Err(BridgeError::Ineligible(
-            BridgeBlocker::PayloadFieldTooSmall,
-        ));
+        return Err(BridgeError::Ineligible(BridgeBlocker::PayloadFieldTooSmall));
     }
     let count = payload.len().div_ceil(chunk_limit);
     if count > MAX_BRIDGE_MESSAGES_PER_SESSION {
@@ -164,8 +162,9 @@ pub fn round_trip_payload<C: ServiceMessageChannel>(
         };
         let response = channel.exchange(&request)?;
         validate_response(&request, &response, chunk)?;
-        let decoded = decode_base64(&response.payload_base64)
-            .ok_or(BridgeError::InvalidResponse(ProtocolViolation::InvalidBase64))?;
+        let decoded = decode_base64(&response.payload_base64).ok_or(
+            BridgeError::InvalidResponse(ProtocolViolation::InvalidBase64),
+        )?;
         reconstructed.extend_from_slice(&decoded);
     }
 
@@ -192,7 +191,9 @@ fn validate_response(
         ));
     }
     if response.session_id != request.session_id {
-        return Err(BridgeError::InvalidResponse(ProtocolViolation::WrongSession));
+        return Err(BridgeError::InvalidResponse(
+            ProtocolViolation::WrongSession,
+        ));
     }
     if response.sequence != request.sequence {
         return Err(BridgeError::InvalidResponse(
@@ -205,8 +206,9 @@ fn validate_response(
         ));
     }
 
-    let decoded = decode_base64(&response.payload_base64)
-        .ok_or(BridgeError::InvalidResponse(ProtocolViolation::InvalidBase64))?;
+    let decoded = decode_base64(&response.payload_base64).ok_or(BridgeError::InvalidResponse(
+        ProtocolViolation::InvalidBase64,
+    ))?;
     if checksum(&decoded) != response.payload_checksum_crc32 {
         return Err(BridgeError::InvalidResponse(
             ProtocolViolation::ChecksumMismatch,
@@ -221,8 +223,7 @@ fn validate_response(
 }
 
 fn encode_base64(input: &[u8]) -> String {
-    const TABLE: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut output = String::with_capacity(input.len().div_ceil(3) * 4);
 
     for chunk in input.chunks(3) {
