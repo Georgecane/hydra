@@ -27,15 +27,21 @@ pub enum Status {
 impl Status {
     fn from_byte(value: u8) -> Option<Self> {
         match value {
-            0 => Some(Self::Ok), 1 => Some(Self::PayloadTooLarge),
-            2 => Some(Self::ChecksumMismatch), 3 => Some(Self::InvalidFrame),
-            4 => Some(Self::UpstreamUnavailable), 5 => Some(Self::UpstreamRejected),
-            6 => Some(Self::Timeout), _ => None,
+            0 => Some(Self::Ok),
+            1 => Some(Self::PayloadTooLarge),
+            2 => Some(Self::ChecksumMismatch),
+            3 => Some(Self::InvalidFrame),
+            4 => Some(Self::UpstreamUnavailable),
+            5 => Some(Self::UpstreamRejected),
+            6 => Some(Self::Timeout),
+            _ => None,
         }
     }
 }
 impl fmt::Display for Status {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result { write!(f, "{self:?}") }
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{self:?}")
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -63,7 +69,10 @@ impl fmt::Display for FrameError {
 impl std::error::Error for FrameError {}
 
 fn frame_error(status: Status, message: impl Into<String>) -> FrameError {
-    FrameError { status, message: message.into() }
+    FrameError {
+        status,
+        message: message.into(),
+    }
 }
 fn status_for_io(error: &io::Error) -> Status {
     match error.kind() {
@@ -88,15 +97,19 @@ pub fn checksum(payload: &[u8]) -> u32 {
 
 fn validate_limit(limit: usize) -> io::Result<()> {
     if limit == 0 || limit > MAX_PAYLOAD_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput,
-            format!("payload limit must be 1..={MAX_PAYLOAD_BYTES}")));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("payload limit must be 1..={MAX_PAYLOAD_BYTES}"),
+        ));
     }
     Ok(())
 }
 fn validate_loopback(address: SocketAddr, label: &str) -> io::Result<()> {
     if !address.ip().is_loopback() {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied,
-            format!("{label} must be a loopback address in this experiment")));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{label} must be a loopback address in this experiment"),
+        ));
     }
     Ok(())
 }
@@ -106,20 +119,25 @@ fn configure_stream(stream: &TcpStream, timeout: Duration) -> io::Result<()> {
 }
 fn read_u64<R: Read>(reader: &mut R) -> Result<u64, FrameError> {
     let mut bytes = [0; 8];
-    reader.read_exact(&mut bytes)
+    reader
+        .read_exact(&mut bytes)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     Ok(u64::from_be_bytes(bytes))
 }
 fn read_u32<R: Read>(reader: &mut R) -> Result<u32, FrameError> {
     let mut bytes = [0; 4];
-    reader.read_exact(&mut bytes)
+    reader
+        .read_exact(&mut bytes)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     Ok(u32::from_be_bytes(bytes))
 }
 
 fn write_request<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
     if payload.len() > MAX_PAYLOAD_BYTES {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "payload exceeds protocol limit"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "payload exceeds protocol limit",
+        ));
     }
     writer.write_all(REQUEST_MAGIC)?;
     writer.write_all(&(payload.len() as u64).to_be_bytes())?;
@@ -129,7 +147,8 @@ fn write_request<W: Write>(writer: &mut W, payload: &[u8]) -> io::Result<()> {
 }
 fn read_request<R: Read>(reader: &mut R, limit: usize) -> Result<Vec<u8>, FrameError> {
     let mut magic = [0; 4];
-    reader.read_exact(&mut magic)
+    reader
+        .read_exact(&mut magic)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     if &magic != REQUEST_MAGIC {
         return Err(frame_error(Status::InvalidFrame, "invalid request marker"));
@@ -137,22 +156,35 @@ fn read_request<R: Read>(reader: &mut R, limit: usize) -> Result<Vec<u8>, FrameE
     let length = read_u64(reader)?;
     let expected = read_u32(reader)?;
     if length > limit as u64 || length > MAX_PAYLOAD_BYTES as u64 {
-        return Err(frame_error(Status::PayloadTooLarge,
-            format!("request length {length} exceeds configured limit {limit}")));
+        return Err(frame_error(
+            Status::PayloadTooLarge,
+            format!("request length {length} exceeds configured limit {limit}"),
+        ));
     }
-    let length = usize::try_from(length)
-        .map_err(|_| frame_error(Status::PayloadTooLarge, "request length does not fit this platform"))?;
+    let length = usize::try_from(length).map_err(|_| {
+        frame_error(
+            Status::PayloadTooLarge,
+            "request length does not fit this platform",
+        )
+    })?;
     let mut payload = vec![0; length];
-    reader.read_exact(&mut payload)
+    reader
+        .read_exact(&mut payload)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     if checksum(&payload) != expected {
-        return Err(frame_error(Status::ChecksumMismatch, "request checksum mismatch"));
+        return Err(frame_error(
+            Status::ChecksumMismatch,
+            "request checksum mismatch",
+        ));
     }
     Ok(payload)
 }
 fn write_response<W: Write>(writer: &mut W, status: Status, payload: &[u8]) -> io::Result<()> {
     if payload.len() > MAX_PAYLOAD_BYTES || (status != Status::Ok && !payload.is_empty()) {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "invalid response payload"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "invalid response payload",
+        ));
     }
     writer.write_all(RESPONSE_MAGIC)?;
     writer.write_all(&[status as u8])?;
@@ -163,34 +195,54 @@ fn write_response<W: Write>(writer: &mut W, status: Status, payload: &[u8]) -> i
 }
 fn read_response<R: Read>(reader: &mut R, limit: usize) -> Result<Response, FrameError> {
     let mut magic = [0; 4];
-    reader.read_exact(&mut magic)
+    reader
+        .read_exact(&mut magic)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     if &magic != RESPONSE_MAGIC {
         return Err(frame_error(Status::InvalidFrame, "invalid response marker"));
     }
     let mut code = [0; 1];
-    reader.read_exact(&mut code)
+    reader
+        .read_exact(&mut code)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     let status = Status::from_byte(code[0])
         .ok_or_else(|| frame_error(Status::InvalidFrame, "unknown response status"))?;
     let length = read_u64(reader)?;
     let expected = read_u32(reader)?;
     if length > limit as u64 || length > MAX_PAYLOAD_BYTES as u64 {
-        return Err(frame_error(Status::PayloadTooLarge, "response exceeds configured limit"));
+        return Err(frame_error(
+            Status::PayloadTooLarge,
+            "response exceeds configured limit",
+        ));
     }
     if status != Status::Ok && length != 0 {
-        return Err(frame_error(Status::InvalidFrame, "error response has a payload"));
+        return Err(frame_error(
+            Status::InvalidFrame,
+            "error response has a payload",
+        ));
     }
-    let length = usize::try_from(length)
-        .map_err(|_| frame_error(Status::PayloadTooLarge, "response length does not fit this platform"))?;
+    let length = usize::try_from(length).map_err(|_| {
+        frame_error(
+            Status::PayloadTooLarge,
+            "response length does not fit this platform",
+        )
+    })?;
     let mut payload = vec![0; length];
-    reader.read_exact(&mut payload)
+    reader
+        .read_exact(&mut payload)
         .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     let actual = checksum(&payload);
     if actual != expected {
-        return Err(frame_error(Status::ChecksumMismatch, "response checksum mismatch"));
+        return Err(frame_error(
+            Status::ChecksumMismatch,
+            "response checksum mismatch",
+        ));
     }
-    Ok(Response { status, payload, checksum: actual })
+    Ok(Response {
+        status,
+        payload,
+        checksum: actual,
+    })
 }
 fn write_error<W: Write>(writer: &mut W, status: Status) -> io::Result<()> {
     write_response(writer, status, &[])
@@ -206,7 +258,10 @@ fn accept_with_timeout(listener: &TcpListener, timeout: Duration) -> io::Result<
             }
             Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                 if Instant::now() >= deadline {
-                    return Err(io::Error::new(io::ErrorKind::TimedOut, "waiting for client timed out"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "waiting for client timed out",
+                    ));
                 }
                 thread::sleep(Duration::from_millis(5));
             }
@@ -225,7 +280,9 @@ pub fn serve_once(
 ) -> io::Result<ServerReport> {
     validate_limit(limit)?;
     validate_loopback(listener.local_addr()?, "listener")?;
-    if let Some(address) = upstream { validate_loopback(address, "upstream")?; }
+    if let Some(address) = upstream {
+        validate_loopback(address, "upstream")?;
+    }
 
     let mut client = accept_with_timeout(listener, timeout)?;
     configure_stream(&client, timeout)?;
@@ -233,36 +290,64 @@ pub fn serve_once(
         Ok(payload) => payload,
         Err(e) => {
             let _ = write_error(&mut client, e.status);
-            return Ok(ServerReport { status: e.status, bytes_received: 0, relayed: upstream.is_some() });
+            return Ok(ServerReport {
+                status: e.status,
+                bytes_received: 0,
+                relayed: upstream.is_some(),
+            });
         }
     };
 
     let response = if let Some(address) = upstream {
         match TcpStream::connect_timeout(&address, timeout) {
             Ok(mut stream) => {
-                if configure_stream(&stream, timeout).is_err() || write_request(&mut stream, &request).is_err() {
-                    Response { status: Status::UpstreamUnavailable, payload: Vec::new(), checksum: checksum(&[]) }
+                if configure_stream(&stream, timeout).is_err()
+                    || write_request(&mut stream, &request).is_err()
+                {
+                    Response {
+                        status: Status::UpstreamUnavailable,
+                        payload: Vec::new(),
+                        checksum: checksum(&[]),
+                    }
                 } else {
                     match read_response(&mut stream, limit) {
                         Ok(response) => response,
                         Err(e) => Response {
-                            status: if e.status == Status::Timeout { Status::Timeout } else { Status::UpstreamUnavailable },
-                            payload: Vec::new(), checksum: checksum(&[]),
+                            status: if e.status == Status::Timeout {
+                                Status::Timeout
+                            } else {
+                                Status::UpstreamUnavailable
+                            },
+                            payload: Vec::new(),
+                            checksum: checksum(&[]),
                         },
                     }
                 }
             }
             Err(e) => Response {
-                status: if e.kind() == io::ErrorKind::TimedOut { Status::Timeout } else { Status::UpstreamUnavailable },
-                payload: Vec::new(), checksum: checksum(&[]),
+                status: if e.kind() == io::ErrorKind::TimedOut {
+                    Status::Timeout
+                } else {
+                    Status::UpstreamUnavailable
+                },
+                payload: Vec::new(),
+                checksum: checksum(&[]),
             },
         }
     } else {
-        Response { status: Status::Ok, checksum: checksum(&request), payload: request.clone() }
+        Response {
+            status: Status::Ok,
+            checksum: checksum(&request),
+            payload: request.clone(),
+        }
     };
 
     write_response(&mut client, response.status, &response.payload)?;
-    Ok(ServerReport { status: response.status, bytes_received: request.len(), relayed: upstream.is_some() })
+    Ok(ServerReport {
+        status: response.status,
+        bytes_received: request.len(),
+        relayed: upstream.is_some(),
+    })
 }
 
 /// Send one payload to a loopback lab node and validate the framed response.
@@ -273,14 +358,20 @@ pub fn send_payload(
     timeout: Duration,
 ) -> Result<Response, FrameError> {
     validate_limit(limit).map_err(|e| frame_error(Status::InvalidFrame, e.to_string()))?;
-    validate_loopback(address, "destination").map_err(|e| frame_error(Status::InvalidFrame, e.to_string()))?;
+    validate_loopback(address, "destination")
+        .map_err(|e| frame_error(Status::InvalidFrame, e.to_string()))?;
     if payload.len() > limit || payload.len() > MAX_PAYLOAD_BYTES {
-        return Err(frame_error(Status::PayloadTooLarge, "client payload exceeds configured limit"));
+        return Err(frame_error(
+            Status::PayloadTooLarge,
+            "client payload exceeds configured limit",
+        ));
     }
     let mut stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|e| frame_error(status_for_io(&e), format!("connect to {address}: {e}")))?;
-    configure_stream(&stream, timeout).map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
-    write_request(&mut stream, payload).map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
+    configure_stream(&stream, timeout)
+        .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
+    write_request(&mut stream, payload)
+        .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
     read_response(&mut stream, limit)
 }
 
@@ -298,7 +389,10 @@ mod tests {
         let payload = [0, 255, 0, 1, 128, 10, 13];
         let mut request = Vec::new();
         write_request(&mut request, &payload).unwrap();
-        assert_eq!(read_request(&mut Cursor::new(request), 64).unwrap(), payload);
+        assert_eq!(
+            read_request(&mut Cursor::new(request), 64).unwrap(),
+            payload
+        );
         let mut response = Vec::new();
         write_response(&mut response, Status::Ok, &payload).unwrap();
         let decoded = read_response(&mut Cursor::new(response), 64).unwrap();
@@ -309,7 +403,12 @@ mod tests {
     fn oversized_request_rejected_before_body_allocation() {
         let mut bytes = Vec::new();
         write_request(&mut bytes, &[7; 32]).unwrap();
-        assert_eq!(read_request(&mut Cursor::new(bytes), 16).unwrap_err().status, Status::PayloadTooLarge);
+        assert_eq!(
+            read_request(&mut Cursor::new(bytes), 16)
+                .unwrap_err()
+                .status,
+            Status::PayloadTooLarge
+        );
     }
     #[test]
     fn corrupted_request_rejected() {
@@ -317,11 +416,21 @@ mod tests {
         write_request(&mut bytes, b"correct").unwrap();
         let last = bytes.len() - 1;
         bytes[last] ^= 0xff;
-        assert_eq!(read_request(&mut Cursor::new(bytes), 64).unwrap_err().status, Status::ChecksumMismatch);
+        assert_eq!(
+            read_request(&mut Cursor::new(bytes), 64)
+                .unwrap_err()
+                .status,
+            Status::ChecksumMismatch
+        );
     }
     #[test]
     fn truncated_frame_rejected() {
-        assert_eq!(read_request(&mut Cursor::new(b"HYD1\\x00"), 64).unwrap_err().status, Status::InvalidFrame);
+        assert_eq!(
+            read_request(&mut Cursor::new(b"HYD1\\x00"), 64)
+                .unwrap_err()
+                .status,
+            Status::InvalidFrame
+        );
     }
     #[test]
     fn non_loopback_target_rejected() {
@@ -335,7 +444,9 @@ mod tests {
         let closed = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let upstream = closed.local_addr().unwrap();
         drop(closed);
-        let worker = thread::spawn(move || serve_once(&listener, Some(upstream), 1024, Duration::from_secs(1)).unwrap());
+        let worker = thread::spawn(move || {
+            serve_once(&listener, Some(upstream), 1024, Duration::from_secs(1)).unwrap()
+        });
         let response = send_payload(relay, b"test", 1024, Duration::from_secs(1)).unwrap();
         assert_eq!(response.status, Status::UpstreamUnavailable);
         assert!(response.payload.is_empty());
@@ -345,8 +456,15 @@ mod tests {
     fn origin_enforces_configured_limit() {
         let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
         let address = listener.local_addr().unwrap();
-        let worker = thread::spawn(move || serve_once(&listener, None, 8, Duration::from_secs(1)).unwrap());
-        let response = send_payload(address, b"nine bytes", MAX_PAYLOAD_BYTES, Duration::from_secs(1)).unwrap();
+        let worker =
+            thread::spawn(move || serve_once(&listener, None, 8, Duration::from_secs(1)).unwrap());
+        let response = send_payload(
+            address,
+            b"nine bytes",
+            MAX_PAYLOAD_BYTES,
+            Duration::from_secs(1),
+        )
+        .unwrap();
         assert_eq!(response.status, Status::PayloadTooLarge);
         assert_eq!(worker.join().unwrap().status, Status::PayloadTooLarge);
     }
