@@ -156,6 +156,20 @@ fn read_request<R: Read>(reader: &mut R, limit: usize) -> Result<Vec<u8>, FrameE
     let length = read_u64(reader)?;
     let expected = read_u32(reader)?;
     if length > limit as u64 || length > MAX_PAYLOAD_BYTES as u64 {
+        // Consume an over-limit body only when its declared size is still bounded by
+        // the protocol hard cap. This allows a framed rejection to reach the client
+        // instead of closing a TCP socket with unread bytes and triggering a reset.
+        if length <= MAX_PAYLOAD_BYTES as u64 {
+            let mut remaining = length;
+            let mut discard = [0_u8; 8192];
+            while remaining > 0 {
+                let take = remaining.min(discard.len() as u64) as usize;
+                reader
+                    .read_exact(&mut discard[..take])
+                    .map_err(|e| frame_error(status_for_io(&e), e.to_string()))?;
+                remaining -= take as u64;
+            }
+        }
         return Err(frame_error(
             Status::PayloadTooLarge,
             format!("request length {length} exceeds configured limit {limit}"),
