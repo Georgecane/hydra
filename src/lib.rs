@@ -1,6 +1,7 @@
 //! Hydra's first experiment: distinguish network reachability from relay capability.
 //! This is a local simulator only; it does not inspect or tunnel through third-party services.
 
+pub mod adapter;
 pub mod transport;
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -56,6 +57,17 @@ impl TransportGraph {
             to: to.into(),
             capability,
         });
+    }
+
+    /// Add a graph edge using an adapter's declared capability and authorization.
+    /// Unverified or unauthorized adapters cannot create generic-relay edges.
+    pub fn add_adapter_link(
+        &mut self,
+        from: impl Into<NodeId>,
+        to: impl Into<NodeId>,
+        adapter: &dyn crate::adapter::TransportAdapter,
+    ) {
+        self.add_link(from, to, adapter.descriptor().link_capability());
     }
 
     pub fn links(&self) -> &[Link] {

@@ -1,6 +1,7 @@
+use hydra::adapter::{LoopbackTcpAdapter, TransportAdapter};
 use hydra::transport::{
-    checksum, send_session, serve_session_with_faults, FaultInjection, Status,
-    DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
+    checksum, serve_session_with_faults, FaultInjection, Status, DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
@@ -190,8 +191,10 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     };
 
     let payloads = vec![payload; max_messages];
-    let responses =
-        send_session(address, &payloads, max_bytes, timeout).map_err(|error| error.to_string())?;
+    let adapter = LoopbackTcpAdapter::default();
+    let responses = adapter
+        .send_session(address, &payloads, max_bytes, timeout)
+        .map_err(|error| error.to_string())?;
 
     for (index, response) in responses.iter().enumerate() {
         if response.status != Status::Ok {

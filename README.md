@@ -6,11 +6,12 @@ Hydra is experimental. It does not claim that ordinary app connections can autom
 
 ## Current milestone
 
-The repository now contains three experiments:
+The repository now contains four experiments:
 
 1. A graph model that only recognizes edges with explicitly verified arbitrary-payload relay capability.
 2. A real TCP payload test using three locally controlled nodes: a client, a relay, and an echo origin.
 3. Fault injection for delayed replies, truncated response frames, and deliberate mid-session disconnects.
+4. A transport-adapter contract that requires explicit payload-capability and authorization metadata before routing can treat an adapter as a generic relay.
 
 The TCP lab is loopback-only and does not connect to external hosts or third-party applications.
 
@@ -57,7 +58,9 @@ These flags are intended for the loopback test harness only. Configure one fault
 - Connection, read, and write timeouts are configured.
 - Frames include CRC-32 checksums to detect accidental corruption. CRC-32 is not authentication or encryption.
 - Relays forward data only to the explicitly configured local upstream.
-- A service-specific API is not treated as an arbitrary data relay.
+- Only the loopback TCP adapter is executable in this milestone.
+- An adapter is routable as an arbitrary relay only when it is enabled, explicitly authorized, supports arbitrary payloads, and declares a non-zero payload limit.
+- Fixed-service APIs, unknown capabilities, denied permissions, and disabled adapters cannot create generic-relay edges.
 - This milestone does not prove that any third-party service or restricted network can relay arbitrary data.
 
 See the transport feasibility experiment in docs/transport-feasibility-experiment.md for the test matrix and next steps.

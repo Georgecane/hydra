@@ -21,6 +21,19 @@ Client process -> relay process -> origin process
 
 The origin echoes each verified payload. The relay validates a bounded request frame, forwards it to an explicitly configured upstream, validates the upstream response, and relays the response to the client. The client checks that every returned payload is byte-for-byte identical to its corresponding input.
 
+## Transport-adapter policy
+
+The adapter contract separates connectivity from the permission and capability to relay arbitrary payloads.
+
+- Payload capability is one of ArbitraryPayload, FixedServiceApi, or Unknown.
+- Authorization is one of ExplicitlyGranted, Denied, or Unknown.
+- An adapter must be enabled and declare a positive per-message payload limit.
+- Only ArbitraryPayload plus ExplicitlyGranted plus enabled plus a positive limit maps to an ArbitraryPayloadRelay graph edge.
+- Fixed-service APIs are represented as FixedServiceApi edges, which the generic route finder does not traverse. All unknown, denied, or disabled cases are conservative and do not create generic-relay edges.
+- The only executable adapter in this milestone is loopback TCP. There is no third-party adapter.
+
+The CLI sender and integration test use the LoopbackTcpAdapter through the common TransportAdapter interface. Metadata policy tests verify that an adapter without explicit authorization cannot open a route.
+
 ## Frame format
 
 Request frame:
@@ -85,4 +98,4 @@ This local protocol validates data transport through an explicitly configured re
 
 ## Next milestone
 
-Add a reusable transport-adapter trait and an in-memory fault model so link capability, authorization, reliability, and restrictions are represented explicitly. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.
+Add adapter registration and route scoring based on observed availability, latency, payload limits, and repeated success/failure. Keep any real-world adapter disabled until a documented, authorized transport has passed its own feasibility test.

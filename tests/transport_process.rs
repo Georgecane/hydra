@@ -1,6 +1,5 @@
-use hydra::transport::{
-    send_payload, send_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
-};
+use hydra::adapter::{LoopbackTcpAdapter, TransportAdapter};
+use hydra::transport::{send_payload, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS};
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, ChildStdout, Command, Stdio};
@@ -91,13 +90,15 @@ fn three_process_route_transfers_binary_payload_through_relay() {
         vec![0, 255, 0, 1, 128, 10, 13],
         b"fourth message in the same TCP session".to_vec(),
     ];
-    let responses = send_session(
-        relay.address,
-        &payloads,
-        DEFAULT_MAX_PAYLOAD_BYTES,
-        Duration::from_millis(DEFAULT_TIMEOUT_MS),
-    )
-    .expect("send multiple frames over one client -> relay -> origin session");
+    let adapter = LoopbackTcpAdapter::default();
+    let responses = adapter
+        .send_session(
+            relay.address,
+            &payloads,
+            DEFAULT_MAX_PAYLOAD_BYTES,
+            Duration::from_millis(DEFAULT_TIMEOUT_MS),
+        )
+        .expect("send multiple frames over one client -> relay -> origin session");
 
     assert_eq!(responses.len(), payloads.len());
     for (response, payload) in responses.iter().zip(payloads.iter()) {
