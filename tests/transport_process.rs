@@ -1,5 +1,7 @@
 use hydra::adapter::{LoopbackTcpAdapter, TransportAdapter};
-use hydra::transport::{send_payload, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS};
+use hydra::transport::{
+    send_payload, send_session, Status, DEFAULT_MAX_PAYLOAD_BYTES, DEFAULT_TIMEOUT_MS,
+};
 use std::io::{BufRead, BufReader};
 use std::net::{SocketAddr, TcpListener};
 use std::process::{Child, ChildStdout, Command, Stdio};
