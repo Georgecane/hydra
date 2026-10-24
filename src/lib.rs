@@ -568,8 +568,10 @@ mod tests {
 
     #[test]
     fn repeated_failures_mark_unavailable_and_success_restores_availability() {
-        let mut quality = LinkQuality::default();
-        quality.max_payload_bytes = 4096;
+        let mut quality = LinkQuality {
+            max_payload_bytes: 4096,
+            ..LinkQuality::default()
+        };
         let start = Instant::now();
         quality.record_failure(start);
         assert_eq!(quality.availability, Availability::Unknown);
