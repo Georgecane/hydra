@@ -1,3 +1,5 @@
+pub mod transport;
+
 //! Hydra's first experiment: distinguish network reachability from relay capability.
 //! This is a local simulator only; it does not inspect or tunnel through third-party services.
 

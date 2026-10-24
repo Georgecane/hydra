@@ -2,48 +2,66 @@
 
 ## Question
 
-Can a graph assembled from existing network relationships carry arbitrary end-to-end payloads when intermediate devices do not run Hydra?
+Can a client send arbitrary bytes through a controlled intermediate node to a controlled origin, and can the test reliably detect blocked, corrupted, oversized, or unavailable paths?
 
-This experiment separates **reachability** from **relay capability**. Seeing that a client can reach an application's service, and seeing that the service can reach another network, does not prove that the service will forward arbitrary data between those connections.
+This milestone is intentionally more modest than a real Meshnet. First demonstrate the data-plane behavior over a known, controlled TCP path. Only then investigate whether any real-world transport adapter is permitted and technically able to provide equivalent forwarding.
 
-## Safety and scope
+## Scope and boundaries
 
-- Use a local simulator and endpoints you control or have explicit permission to test.
-- Do not use a third-party app's session, API, or infrastructure as an undisclosed tunnel.
-- Do not infer generic relay capability from a successful login, API call, or ordinary app connection.
-- The current prototype performs no packet capture, network scanning, third-party integration, or real traffic forwarding.
+- The automated tests use locally controlled processes bound to loopback addresses only.
+- The code rejects non-loopback listeners, destinations, and upstreams.
+- It does not capture traffic, scan networks, log into third-party apps, or tunnel through third-party infrastructure.
+- The existence of an application session or API connection does not establish permission or ability to forward arbitrary data.
+- CRC-32 is used for accidental-corruption detection only. It is not cryptographic authentication, confidentiality, or protection against an active attacker.
 
-## Model
+## Topology
 
-Each directed edge has one of three capabilities:
+Client process -> relay process -> origin process
 
-- **ArbitraryPayloadRelay:** forwarding arbitrary opaque payloads has been explicitly verified and is authorized.
-- **FixedServiceApi:** the connection supports only a documented, service-specific operation or schema.
-- **Unknown:** the available evidence does not establish relay behavior.
+The origin echoes the verified payload. The relay reads a bounded request frame, forwards the payload to its explicitly configured upstream, checks the upstream response frame, and relays the response to the client. The client verifies that the returned payload is byte-for-byte identical to the original.
 
-The route finder uses only ArbitraryPayloadRelay edges. This conservative rule prevents the experiment from confusing an application-level connection with a general-purpose transport.
+## Frame format
+
+Request frame:
+
+- 4 bytes: request marker HYD1
+- 8 bytes: payload length, unsigned big-endian
+- 4 bytes: CRC-32, unsigned big-endian
+- N bytes: payload
+
+Response frame:
+
+- 4 bytes: response marker HYA1
+- 1 byte: status code
+- 8 bytes: payload length, unsigned big-endian
+- 4 bytes: CRC-32, unsigned big-endian
+- N bytes: echoed payload on success; error responses carry no body
+
+The receiver checks the advertised size before allocating the payload buffer. The default limit is 1 MiB and the hard maximum is 16 MiB. Read, write, and connection timeouts are set for every TCP stream. Each origin or relay serves one client and exits, keeping test runs deterministic.
 
 ## Procedure
 
-1. Model a source, a service endpoint, and an external origin.
-2. Mark the source-to-service edge FixedServiceApi and the service-to-origin edge ArbitraryPayloadRelay.
-3. Run the route finder. Expected result: no end-to-end arbitrary-payload route.
-4. Replace every edge on a test path with an authorized, verified relay edge.
-5. Run the route finder again. Expected result: the path is found.
-6. Add an alternate verified path and confirm that the algorithm can find it when another branch is unusable.
-7. Keep real-world testing separate and require explicit authorization for every relay endpoint.
+1. Start an origin bound to 127.0.0.1.
+2. Start a relay bound to 127.0.0.1 and configured to forward to that origin.
+3. Send a binary payload from a separate client process.
+4. Verify status, checksum, and exact byte equality at the client.
+5. Repeat with an unavailable upstream and confirm a framed error rather than a false success.
+6. Configure a small maximum and confirm oversized payloads are rejected before body allocation.
+7. Run corruption, truncation, route-model, formatting, Clippy, and test checks.
 
-## Current success criteria
+## Success criteria
 
-- Fixed-service and unknown links are never treated as generic relays.
-- A path is returned only if every hop is an authorized, verified arbitrary-payload relay.
-- A longer graph with one non-relay edge is correctly rejected.
-- An alternate verified path can be found.
+- Multi-process client -> relay -> origin transfer preserves all bytes.
+- Binary values such as zero bytes and bytes above 127 are preserved.
+- Invalid markers, truncated frames, checksum mismatches, and over-limit lengths are rejected.
+- An unavailable upstream is reported as an error, not a successful transfer.
+- Non-loopback destinations are refused by the experiment harness.
+- CI passes formatting, Clippy with warnings denied, and all unit/integration tests.
 
-## What this experiment cannot prove
+## What this does not prove
 
-This simulation does not prove that any particular app or domestic network can relay arbitrary payloads, that a route exists during a blackout, or that Hydra can reach an origin without a physical or logical data path. It validates only the graph model and its assumptions.
+Passing these tests proves that Hydra's controlled local protocol can forward bytes across the tested topology. It does not establish that a particular domestic service, third-party app, or network during an outage exposes a legitimate arbitrary-payload relay. Every candidate transport must be evaluated using documented behavior, authorization, and a separate test plan.
 
-## Next experiment
+## Next milestone
 
-Implement an in-memory, multi-hop payload test using three locally controlled processes. Give each relay an explicit opt-in protocol, bounded message sizes, end-to-end integrity checks, timeouts, and observable failure reporting. Only after this passes should the project compare authorized transport adapters.
+After the local baseline is stable, add observability and fault injection: relay termination mid-transfer, delayed response, truncated upstream response, and repeatable multi-message sessions. Then design a transport-adapter interface that can represent link capability, consent, reliability, and restrictions without assuming every reachable endpoint can relay data.
