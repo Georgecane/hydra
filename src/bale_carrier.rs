@@ -161,10 +161,7 @@ pub struct BaleSignupChallenge {
 }
 
 impl BaleLoginChallenge {
-    pub async fn begin(
-        token_path: &Path,
-        phone: &str,
-    ) -> Result<Self, BaleCarrierError> {
+    pub async fn begin(token_path: &Path, phone: &str) -> Result<Self, BaleCarrierError> {
         let auth = BaleAuth::new();
         let start = auth
             .start_phone_auth(phone)
@@ -177,10 +174,7 @@ impl BaleLoginChallenge {
         })
     }
 
-    pub async fn verify_otp(
-        self,
-        otp: &str,
-    ) -> Result<BaleOtpProgress, BaleCarrierError> {
+    pub async fn verify_otp(self, otp: &str) -> Result<BaleOtpProgress, BaleCarrierError> {
         let outcome = self
             .auth
             .submit_otp(&self.transaction_hash, otp)
