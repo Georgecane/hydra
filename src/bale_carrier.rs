@@ -12,7 +12,7 @@ use async_trait::async_trait;
 use bale_signaling::auth::{AuthOutcome, BaleAuth};
 use bale_signaling::BaleSignaling;
 use lk_signaling::{
-    CallDecision, IncomingHandler, PeerId, Signaling, TokenStore, TransportSession, TunnelHooks,
+    CallDecision, IncomingHandler, PeerId, Signaling, TokenStore, TransportSession,
 };
 use lktunnel::{LkTunnel, SendError, TunnelState};
 use std::collections::HashSet;
@@ -298,7 +298,7 @@ pub async fn connect_to_peer(
     if token_store.load().is_none() {
         return Err(BaleCarrierError::TokenMissing);
     }
-    let signaling = Arc::new(BaleSignaling::new(token_store));
+    let signaling = BaleSignaling::new(token_store);
     signaling.auto_load_token();
     if !signaling.is_authenticated() {
         return Err(BaleCarrierError::TokenMissing);
@@ -350,7 +350,7 @@ impl BaleCarrierListener {
         if token_store.load().is_none() {
             return Err(BaleCarrierError::TokenMissing);
         }
-        let signaling = Arc::new(BaleSignaling::new(token_store));
+        let signaling = BaleSignaling::new(token_store);
         signaling.auto_load_token();
         if !signaling.is_authenticated() {
             return Err(BaleCarrierError::TokenMissing);
