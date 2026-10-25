@@ -21,6 +21,7 @@ bale-carrier = [
     "dep:bale-signaling",
     "dep:lk-signaling",
     "dep:lktunnel",
+    "dep:livekit-protocol",
     "dep:tokio",
 ]
 
@@ -31,6 +32,8 @@ async-trait = { version = "0.1", optional = true }
 bale-signaling = { git = "https://github.com/kookoo1sabzy/BaleVPN.git", rev = "c1594fa846251a4e48f8dfe11132f941ec0b24ea", package = "bale-signaling", optional = true }
 lk-signaling = { git = "https://github.com/kookoo1sabzy/BaleVPN.git", rev = "c1594fa846251a4e48f8dfe11132f941ec0b24ea", package = "lk-signaling", optional = true }
 lktunnel = { git = "https://github.com/kookoo1sabzy/BaleVPN.git", rev = "c1594fa846251a4e48f8dfe11132f941ec0b24ea", package = "lktunnel", optional = true }
+# Pin to the protocol version used by the provider adapter to avoid semver drift in generated wire structs.
+livekit-protocol = { version = "=0.7.7", optional = true }
 tokio = { version = "1", features = ["rt-multi-thread", "sync", "macros", "time", "io-util", "net"], optional = true }
 
 [dev-dependencies]
