@@ -659,7 +659,10 @@ mod tests {
             .install_route(node(3), node(4), 2, Duration::from_secs(60), now)
             .unwrap();
 
-        assert_eq!(router.process(packet.clone(), now), Err(MeshError::RouteLoop));
+        assert_eq!(
+            router.process(packet.clone(), now),
+            Err(MeshError::RouteLoop)
+        );
         router
             .install_route(node(3), node(5), 2, Duration::from_secs(60), now)
             .unwrap();
