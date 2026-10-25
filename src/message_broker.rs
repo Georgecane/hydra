@@ -57,15 +57,23 @@ impl LocalMailboxHub {
     }
 
     pub fn connect(&self) -> Result<MailboxEndpoint, MailboxError> {
-        let raw = self.inner.next_id
+        let raw = self
+            .inner
+            .next_id
             .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| MailboxError::IdExhausted)?;
         let id = EndpointId(raw);
         let (tx, rx) = sync_channel(self.capacity);
-        self.inner.mailboxes.lock()
+        self.inner
+            .mailboxes
+            .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(id, tx);
-        Ok(MailboxEndpoint { id, inner: Arc::clone(&self.inner), inbox: rx })
+        Ok(MailboxEndpoint {
+            id,
+            inner: Arc::clone(&self.inner),
+            inbox: rx,
+        })
     }
 }
 
@@ -76,13 +84,31 @@ pub struct MailboxEndpoint {
 }
 
 impl MailboxEndpoint {
-    pub fn id(&self) -> EndpointId { self.id }
+    pub fn id(&self) -> EndpointId {
+        self.id
+    }
 
-    pub fn send(&self, to: EndpointId, correlation_id: u64, bytes: Vec<u8>) -> Result<(), MailboxError> {
-        if bytes.len() > MAX_MESSAGE_BYTES { return Err(MailboxError::TooLarge); }
-        let mailboxes = self.inner.mailboxes.lock().unwrap_or_else(|p| p.into_inner());
+    pub fn send(
+        &self,
+        to: EndpointId,
+        correlation_id: u64,
+        bytes: Vec<u8>,
+    ) -> Result<(), MailboxError> {
+        if bytes.len() > MAX_MESSAGE_BYTES {
+            return Err(MailboxError::TooLarge);
+        }
+        let mailboxes = self
+            .inner
+            .mailboxes
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let tx = mailboxes.get(&to).ok_or(MailboxError::PeerUnavailable)?;
-        tx.try_send(MailboxMessage { from: self.id, correlation_id, bytes }).map_err(|e| match e {
+        tx.try_send(MailboxMessage {
+            from: self.id,
+            correlation_id,
+            bytes,
+        })
+        .map_err(|e| match e {
             TrySendError::Full(_) => MailboxError::Full,
             TrySendError::Disconnected(_) => MailboxError::PeerUnavailable,
         })
@@ -98,7 +124,9 @@ impl MailboxEndpoint {
 
 impl Drop for MailboxEndpoint {
     fn drop(&mut self) {
-        self.inner.mailboxes.lock()
+        self.inner
+            .mailboxes
+            .lock()
             .unwrap_or_else(|p| p.into_inner())
             .remove(&self.id);
     }
@@ -121,7 +149,10 @@ mod tests {
                 right.send(m.from, m.correlation_id, m.bytes).unwrap();
             }
         });
-        for (i, payload) in [vec![0, 255, 1], (0..=255).collect(), b"hello".to_vec()].iter().enumerate() {
+        for (i, payload) in [vec![0, 255, 1], (0..=255).collect(), b"hello".to_vec()]
+            .iter()
+            .enumerate()
+        {
             left.send(right_id, i as u64, payload.clone()).unwrap();
             let reply = left.receive(Duration::from_secs(1)).unwrap();
             assert_eq!(reply.from, right_id);
@@ -140,12 +171,18 @@ mod tests {
         sender.send(target, 1, vec![1]).unwrap();
         assert_eq!(sender.send(target, 2, vec![2]), Err(MailboxError::Full));
         drop(receiver);
-        assert_eq!(sender.send(target, 3, vec![3]), Err(MailboxError::PeerUnavailable));
+        assert_eq!(
+            sender.send(target, 3, vec![3]),
+            Err(MailboxError::PeerUnavailable)
+        );
     }
 
     #[test]
     fn capacity_and_payload_size_are_bounded() {
-        assert_eq!(LocalMailboxHub::new(0).err(), Some(MailboxError::InvalidCapacity));
+        assert_eq!(
+            LocalMailboxHub::new(0).err(),
+            Some(MailboxError::InvalidCapacity)
+        );
         let hub = LocalMailboxHub::new(1).unwrap();
         let sender = hub.connect().unwrap();
         let receiver = hub.connect().unwrap();
