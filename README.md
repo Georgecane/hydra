@@ -28,15 +28,21 @@ Build commands in this section with the feature enabled:
 
 Hydra prompts for the one-time code and, only when needed, an account display name. It stores the access-token cookie in the specified file with owner-only permissions. Treat this file like a password and do not commit or share it.
 
+Generate a shared mesh key once:
+
+    cargo run --features bale-carrier -- keygen --key-file ~/.config/hydra/mesh.key
+
+The command refuses to overwrite an existing file and creates it with owner-only permissions on Unix. Transfer the file securely to the other consenting device, do not commit it to Git, and do not paste it into chat. Both peers should use the same key file contents; choose distinct node IDs.
+
 Start the listener on the receiving device, allowing only the expected caller's Bale user ID:
 
-    cargo run --features bale-carrier -- bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <caller-user-id> --key-hex <64-hex-chars> --node-id-hex <64-hex-chars>
+    cargo run --features bale-carrier -- bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <caller-user-id> --key-file ~/.config/hydra/mesh.key --node-id-hex <64-hex-chars>
 
 Connect from the caller device and send an encrypted MeshFrame probe:
 
-    cargo run --features bale-carrier -- bale-connect --token-file ~/.config/hydra/bale.token --peer-id <receiver-user-id> --key-hex <same-64-hex-chars> --node-id-hex <caller-64-hex-chars> --destination-node-id-hex <receiver-64-hex-chars> --message "Hydra carrier probe"
+    cargo run --features bale-carrier -- bale-connect --token-file ~/.config/hydra/bale.token --peer-id <receiver-user-id> --key-file ~/.config/hydra/mesh.key --node-id-hex <caller-64-hex-chars> --destination-node-id-hex <receiver-64-hex-chars> --message "Hydra carrier probe"
 
-Each node ID and the shared key is 32 bytes represented as 64 hexadecimal characters. Choose distinct node IDs, and exchange the key out-of-band between the intended endpoints. Do not reuse a traffic key for unrelated peers.
+Each node ID is 32 bytes represented as 64 hexadecimal characters. The shared traffic key is read from a file instead of a command-line argument to reduce exposure in shell history and process listings. Choose distinct node IDs and transfer the key file securely between intended endpoints. Do not reuse a traffic key for unrelated peers.
 
 This integration uses a regular Bale user account and creates a separate user-to-user call session through the pinned, unofficial BaleVPN LiveKit/signaling implementation. It is not a bot and does not attach to or manipulate an already-running official Bale app socket. The command currently proves one encrypted bidirectional MeshFrame exchange through that call carrier; it does not yet expose an OS TUN interface or provide general Internet access during a blackout.
 

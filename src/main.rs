@@ -15,7 +15,6 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener};
-#[cfg(feature = "bale-carrier")]
 use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
@@ -46,6 +45,7 @@ fn run() -> Result<(), String> {
         "origin" => run_server(&options, false),
         "relay" => run_server(&options, true),
         "send" => run_client(&options),
+        "keygen" => run_keygen(&options),
         #[cfg(feature = "bale-carrier")]
         "bale-login" => run_bale_login(&options),
         #[cfg(feature = "bale-carrier")]
@@ -293,7 +293,7 @@ fn run_bale_listen(options: &HashMap<String, String>) -> Result<(), String> {
         &[
             "token-file",
             "allow-peer",
-            "key-hex",
+            "key-file",
             "node-id-hex",
             "timeout-ms",
             "queue",
@@ -309,7 +309,7 @@ fn run_bale_listen(options: &HashMap<String, String>) -> Result<(), String> {
     if allowed_peers.is_empty() {
         return Err("--allow-peer must contain at least one user peer ID".to_owned());
     }
-    let key = parse_hex_32(required(options, "key-hex")?, "--key-hex")?;
+    let key = load_mesh_key(required(options, "key-file")?)?;
     let local_node = MeshNodeId(parse_hex_32(
         required(options, "node-id-hex")?,
         "--node-id-hex",
@@ -394,7 +394,7 @@ fn run_bale_connect(options: &HashMap<String, String>) -> Result<(), String> {
         &[
             "token-file",
             "peer-id",
-            "key-hex",
+            "key-file",
             "node-id-hex",
             "destination-node-id-hex",
             "message",
@@ -404,7 +404,7 @@ fn run_bale_connect(options: &HashMap<String, String>) -> Result<(), String> {
     )?;
     let token_path = PathBuf::from(required(options, "token-file")?);
     let peer_id = required(options, "peer-id")?.to_owned();
-    let key = parse_hex_32(required(options, "key-hex")?, "--key-hex")?;
+    let key = load_mesh_key(required(options, "key-file")?)?;
     let local_node = MeshNodeId(parse_hex_32(
         required(options, "node-id-hex")?,
         "--node-id-hex",
@@ -538,6 +538,49 @@ fn prompt_line(prompt: &str) -> Result<String, String> {
     } else {
         Ok(value)
     }
+}
+
+
+fn run_keygen(options: &HashMap<String, String>) -> Result<(), String> {
+    ensure_keys(options, &["key-file"])?;
+    let path = PathBuf::from(required(options, "key-file")?);
+    let mut key = [0_u8; 32];
+    getrandom::fill(&mut key).map_err(|error| format!("generate secure random key: {error}"))?;
+
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut encoded = Vec::with_capacity(65);
+    for byte in key {
+        encoded.push(HEX[(byte >> 4) as usize]);
+        encoded.push(HEX[(byte & 0x0f) as usize]);
+    }
+    encoded.push(b'\n');
+
+    let mut file_options = fs::OpenOptions::new();
+    file_options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        file_options.mode(0o600);
+    }
+    let mut file = file_options
+        .open(&path)
+        .map_err(|error| format!("create key file {}: {error}", path.display()))?;
+    if let Err(error) = file.write_all(&encoded).and_then(|()| file.sync_all()) {
+        let _ = fs::remove_file(&path);
+        return Err(format!("write key file {}: {error}", path.display()));
+    }
+    println!(
+        "KEY_CREATED path={} bytes=32 permissions=owner-only-on-unix",
+        path.display()
+    );
+    Ok(())
+}
+
+#[cfg(feature = "bale-carrier")]
+fn load_mesh_key(path: &str) -> Result<[u8; 32], String> {
+    let encoded = fs::read_to_string(path)
+        .map_err(|error| format!("read mesh key file {path:?}: {error}"))?;
+    parse_hex_32(encoded.trim(), "mesh key file")
 }
 
 fn parse_options(args: &[String]) -> Result<HashMap<String, String>, String> {
@@ -714,11 +757,12 @@ fn print_help() {
     println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4 --close-after-messages 2");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --payload 'hello Hydra'");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --file ./payload.bin");
+    println!("  hydra-lab keygen --key-file ~/.config/hydra/mesh.key");
     #[cfg(feature = "bale-carrier")]
     {
         println!("  hydra-lab bale-login --phone +<country-code><number> --token-file ~/.config/hydra/bale.token");
-        println!("  hydra-lab bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <user-id> --key-hex <64-hex> --node-id-hex <64-hex>");
-        println!("  hydra-lab bale-connect --token-file ~/.config/hydra/bale.token --peer-id <user-id> --key-hex <64-hex> --node-id-hex <64-hex> --destination-node-id-hex <64-hex> --message 'hello Hydra'");
+        println!("  hydra-lab bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <user-id> --key-file <64-hex> --node-id-hex <64-hex>");
+        println!("  hydra-lab bale-connect --token-file ~/.config/hydra/bale.token --peer-id <user-id> --key-file <64-hex> --node-id-hex <64-hex> --destination-node-id-hex <64-hex> --message 'hello Hydra'");
     }
     println!();
     println!("Each origin or relay serves one client connection and exits.");
