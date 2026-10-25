@@ -434,9 +434,12 @@ impl MeshRouter {
         if frame.source == self.local_id {
             return Err(MeshError::RouteLoop);
         }
-        self.remember(&frame)?;
 
+        // Only consume a replay-cache entry after the packet has passed routing checks.
+        // Otherwise a transient NoRoute/RouteLoop error would poison a valid retransmission
+        // after the route table is repaired.
         if frame.destination == self.local_id {
+            self.remember(&frame)?;
             return Ok(MeshDecision::Deliver(frame));
         }
         if frame.hop_limit == 0 {
@@ -456,9 +459,11 @@ impl MeshRouter {
             return Err(MeshError::RouteLoop);
         }
 
+        let forwarded = frame.forwarded_by(self.local_id)?;
+        self.remember(&frame)?;
         Ok(MeshDecision::Forward {
             next_hop: route.next_hop,
-            frame: frame.forwarded_by(self.local_id)?,
+            frame: forwarded,
         })
     }
 
@@ -625,6 +630,44 @@ mod tests {
             .unwrap();
         router.process(packet.clone(), now).unwrap();
         assert_eq!(router.process(packet, now), Err(MeshError::DuplicatePacket));
+    }
+
+    #[test]
+    fn packet_can_be_retried_after_a_missing_route_is_installed() {
+        let now = Instant::now();
+        let mut router = MeshRouter::new(node(2), 16).unwrap();
+        let packet = sample_frame(1, 3, 8);
+
+        assert_eq!(router.process(packet.clone(), now), Err(MeshError::NoRoute));
+        router
+            .install_route(node(3), node(4), 2, Duration::from_secs(60), now)
+            .unwrap();
+
+        assert!(matches!(
+            router.process(packet, now),
+            Ok(MeshDecision::Forward { next_hop, .. }) if next_hop == node(4)
+        ));
+    }
+
+    #[test]
+    fn packet_can_be_retried_after_a_route_loop_is_corrected() {
+        let now = Instant::now();
+        let mut router = MeshRouter::new(node(2), 16).unwrap();
+        let mut packet = sample_frame(1, 3, 8);
+        packet.previous_hop = node(4);
+        router
+            .install_route(node(3), node(4), 2, Duration::from_secs(60), now)
+            .unwrap();
+
+        assert_eq!(router.process(packet.clone(), now), Err(MeshError::RouteLoop));
+        router
+            .install_route(node(3), node(5), 2, Duration::from_secs(60), now)
+            .unwrap();
+
+        assert!(matches!(
+            router.process(packet, now),
+            Ok(MeshDecision::Forward { next_hop, .. }) if next_hop == node(5)
+        ));
     }
 
     #[test]
