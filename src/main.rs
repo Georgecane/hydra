@@ -481,7 +481,7 @@ fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
         ));
     }
     let mut bytes = [0_u8; 32];
-    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in value.as_bytes().as_chunks::<2>().0.iter().enumerate() {
         let pair =
             std::str::from_utf8(pair).map_err(|error| format!("invalid {label}: {error}"))?;
         bytes[index] = u8::from_str_radix(pair, 16)
