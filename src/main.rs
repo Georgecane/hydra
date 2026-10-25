@@ -554,7 +554,10 @@ fn run_keygen(options: &HashMap<String, String>) -> Result<(), String> {
     }
     encoded.push(b'\n');
 
-    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+    if let Some(parent) = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
         fs::create_dir_all(parent)
             .map_err(|error| format!("create key directory {}: {error}", parent.display()))?;
     }
@@ -789,7 +792,10 @@ mod keygen_tests {
         let root = env::temp_dir().join(format!("hydra-keygen-{}-{unique}", process::id()));
         let key_path = root.join("nested").join("mesh.key");
         let mut options = HashMap::new();
-        options.insert("key-file".to_owned(), key_path.to_string_lossy().into_owned());
+        options.insert(
+            "key-file".to_owned(),
+            key_path.to_string_lossy().into_owned(),
+        );
 
         run_keygen(&options).expect("keygen should create missing parent directories");
         let content = fs::read_to_string(&key_path).expect("read generated key file");
@@ -811,4 +817,3 @@ mod keygen_tests {
         fs::remove_dir_all(root).expect("remove keygen test directory");
     }
 }
-
