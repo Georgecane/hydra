@@ -140,45 +140,83 @@ fn write_token_file(path: &Path, token: &[u8]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Sign in with a normal Bale user account using an OTP and persist the access-token cookie.
-/// This is for a regular user account, not a bot. New accounts may require signup_name.
-pub async fn login_with_otp(
-    token_path: &Path,
-    phone: &str,
-    otp: &str,
-    signup_name: Option<&str>,
-) -> Result<(), BaleCarrierError> {
-    let auth = BaleAuth::new();
-    let start = auth
-        .start_phone_auth(phone)
-        .await
-        .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?;
-    let outcome = auth
-        .submit_otp(&start.transaction_hash, otp)
-        .await
-        .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?;
+/// Login flow after a normal Bale user enters their phone number.
+///
+/// Call begin(), prompt for the received one-time code, then call verify_otp().
+pub struct BaleLoginChallenge {
+    auth: BaleAuth,
+    token_path: PathBuf,
+    transaction_hash: String,
+}
 
-    let outcome = match outcome {
-        AuthOutcome::Authenticated { .. } => outcome,
-        AuthOutcome::NeedsSignupName { transaction_hash } => {
-            let name = signup_name.ok_or_else(|| {
-                BaleCarrierError::Authentication(
-                    "new account requires signup_name after OTP verification".to_owned(),
-                )
-            })?;
-            auth.submit_signup_name(&transaction_hash, name)
-                .await
-                .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?
-        }
-    };
+pub enum BaleOtpProgress {
+    Authenticated,
+    NeedsSignupName(BaleSignupChallenge),
+}
 
-    match outcome {
-        AuthOutcome::Authenticated { access_token } => {
-            BaleFileTokenStore::new(token_path).write_token(&access_token)
+pub struct BaleSignupChallenge {
+    auth: BaleAuth,
+    token_path: PathBuf,
+    transaction_hash: String,
+}
+
+impl BaleLoginChallenge {
+    pub async fn begin(
+        token_path: &Path,
+        phone: &str,
+    ) -> Result<Self, BaleCarrierError> {
+        let auth = BaleAuth::new();
+        let start = auth
+            .start_phone_auth(phone)
+            .await
+            .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?;
+        Ok(Self {
+            auth,
+            token_path: token_path.to_path_buf(),
+            transaction_hash: start.transaction_hash,
+        })
+    }
+
+    pub async fn verify_otp(
+        self,
+        otp: &str,
+    ) -> Result<BaleOtpProgress, BaleCarrierError> {
+        let outcome = self
+            .auth
+            .submit_otp(&self.transaction_hash, otp)
+            .await
+            .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?;
+        match outcome {
+            AuthOutcome::Authenticated { access_token } => {
+                BaleFileTokenStore::new(&self.token_path).write_token(&access_token)?;
+                Ok(BaleOtpProgress::Authenticated)
+            }
+            AuthOutcome::NeedsSignupName { transaction_hash } => {
+                Ok(BaleOtpProgress::NeedsSignupName(BaleSignupChallenge {
+                    auth: self.auth,
+                    token_path: self.token_path,
+                    transaction_hash,
+                }))
+            }
         }
-        AuthOutcome::NeedsSignupName { .. } => Err(BaleCarrierError::Authentication(
-            "sign-in completed without an access token".to_owned(),
-        )),
+    }
+}
+
+impl BaleSignupChallenge {
+    pub async fn submit(self, name: &str) -> Result<(), BaleCarrierError> {
+        let outcome = self
+            .auth
+            .submit_signup_name(&self.transaction_hash, name)
+            .await
+            .map_err(|error| BaleCarrierError::Authentication(error.to_string()))?;
+        match outcome {
+            AuthOutcome::Authenticated { access_token } => {
+                BaleFileTokenStore::new(&self.token_path).write_token(&access_token)
+            }
+            AuthOutcome::NeedsSignupName { .. } => Err(BaleCarrierError::Authentication(
+                "sign-up did not produce an access token".to_owned(),
+            )),
+        }
     }
 }
 

@@ -4,6 +4,16 @@ use hydra::transport::{
     DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
 };
 use hydra::{LinkCapability, NodeId, TransportGraph};
+#[cfg(feature = "bale-carrier")]
+use hydra::bale_carrier::{
+    connect_to_peer, BaleCarrierListener, BaleLoginChallenge, BaleOtpProgress,
+};
+#[cfg(feature = "bale-carrier")]
+use hydra::mesh::{FrameKind, MeshCipher, MeshNodeId};
+#[cfg(feature = "bale-carrier")]
+use std::path::PathBuf;
+#[cfg(feature = "bale-carrier")]
+use std::time::Instant;
 use std::collections::HashMap;
 use std::env;
 use std::fs;
@@ -36,6 +46,12 @@ fn run() -> Result<(), String> {
         "origin" => run_server(&options, false),
         "relay" => run_server(&options, true),
         "send" => run_client(&options),
+        #[cfg(feature = "bale-carrier")]
+        "bale-login" => run_bale_login(&options),
+        #[cfg(feature = "bale-carrier")]
+        "bale-listen" => run_bale_listen(&options),
+        #[cfg(feature = "bale-carrier")]
+        "bale-connect" => run_bale_connect(&options),
         _ => Err(format!("unknown command {command:?}; run hydra-lab help")),
     }
 }
@@ -230,6 +246,303 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
+
+#[cfg(feature = "bale-carrier")]
+fn run_bale_login(options: &HashMap<String, String>) -> Result<(), String> {
+    ensure_keys(options, &["phone", "token-file", "signup-name"])?;
+    let phone = required(options, "phone")?.to_owned();
+    let token_path = PathBuf::from(required(options, "token-file")?);
+    let configured_name = options.get("signup-name").cloned();
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("create Tokio runtime: {error}"))?;
+
+    runtime.block_on(async move {
+        let challenge = BaleLoginChallenge::begin(&token_path, &phone)
+            .await
+            .map_err(|error| error.to_string())?;
+        let otp = prompt_line("Enter the one-time code received from Bale: ")?;
+        match challenge
+            .verify_otp(&otp)
+            .await
+            .map_err(|error| error.to_string())?
+        {
+            BaleOtpProgress::Authenticated => {
+                println!("AUTHENTICATED token_file={}", token_path.display());
+            }
+            BaleOtpProgress::NeedsSignupName(challenge) => {
+                let name = match configured_name {
+                    Some(name) => name,
+                    None => prompt_line("Bale requires a display name for this account: ")?,
+                };
+                challenge
+                    .submit(&name)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                println!("AUTHENTICATED token_file={}", token_path.display());
+            }
+        }
+        Ok(())
+    })
+}
+
+#[cfg(feature = "bale-carrier")]
+fn run_bale_listen(options: &HashMap<String, String>) -> Result<(), String> {
+    ensure_keys(
+        options,
+        &[
+            "token-file",
+            "allow-peer",
+            "key-hex",
+            "node-id-hex",
+            "timeout-ms",
+            "queue",
+        ],
+    )?;
+    let token_path = PathBuf::from(required(options, "token-file")?);
+    let allowed_peers = required(options, "allow-peer")?
+        .split(',')
+        .map(str::trim)
+        .filter(|peer| !peer.is_empty())
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    if allowed_peers.is_empty() {
+        return Err("--allow-peer must contain at least one user peer ID".to_owned());
+    }
+    let key = parse_hex_32(required(options, "key-hex")?, "--key-hex")?;
+    let local_node = MeshNodeId(parse_hex_32(
+        required(options, "node-id-hex")?,
+        "--node-id-hex",
+    )?);
+    let queue_capacity = parse_bale_queue(options)?;
+    let timeout = parse_bale_timeout(options)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("create Tokio runtime: {error}"))?;
+
+    runtime.block_on(async move {
+        let mut listener = BaleCarrierListener::bind(
+            &token_path,
+            allowed_peers,
+            queue_capacity,
+            timeout,
+        )
+        .await
+        .map_err(|error| error.to_string())?;
+        println!("READY carrier=bale-livekit mode=allowlisted-listener");
+        loop {
+            let (peer_id, carrier) = listener
+                .accept_next(Duration::from_secs(24 * 60 * 60))
+                .await
+                .map_err(|error| error.to_string())?;
+            println!("PEER_CONNECTED peer_id={peer_id}");
+            tokio::spawn(serve_bale_echo(carrier, key, local_node));
+        }
+    })
+}
+
+#[cfg(feature = "bale-carrier")]
+async fn serve_bale_echo(
+    mut carrier: hydra::bale_carrier::BaleLiveKitCarrier,
+    key: [u8; 32],
+    local_node: MeshNodeId,
+) {
+    let cipher = MeshCipher::new(&key);
+    loop {
+        let frame = match carrier.receive_frame().await {
+            Ok(frame) => frame,
+            Err(error) => {
+                eprintln!("Bale peer closed: {error}");
+                break;
+            }
+        };
+        if frame.kind != FrameKind::Data || frame.destination != local_node {
+            continue;
+        }
+        let payload = match cipher.open(&frame) {
+            Ok(payload) => payload,
+            Err(error) => {
+                eprintln!("Dropped unauthenticated MeshFrame: {error}");
+                continue;
+            }
+        };
+        let response = match cipher.seal(
+            FrameKind::Acknowledgement,
+            0,
+            8,
+            local_node,
+            frame.source,
+            local_node,
+            frame.packet_id,
+            frame.sequence,
+            &payload,
+        ) {
+            Ok(response) => response,
+            Err(error) => {
+                eprintln!("Could not seal MeshFrame response: {error}");
+                break;
+            }
+        };
+        if let Err(error) = carrier.send_frame(&response) {
+            eprintln!("Bale carrier send failed: {error}");
+            break;
+        }
+    }
+}
+
+#[cfg(feature = "bale-carrier")]
+fn run_bale_connect(options: &HashMap<String, String>) -> Result<(), String> {
+    ensure_keys(
+        options,
+        &[
+            "token-file",
+            "peer-id",
+            "key-hex",
+            "node-id-hex",
+            "destination-node-id-hex",
+            "message",
+            "timeout-ms",
+            "queue",
+        ],
+    )?;
+    let token_path = PathBuf::from(required(options, "token-file")?);
+    let peer_id = required(options, "peer-id")?.to_owned();
+    let key = parse_hex_32(required(options, "key-hex")?, "--key-hex")?;
+    let local_node = MeshNodeId(parse_hex_32(
+        required(options, "node-id-hex")?,
+        "--node-id-hex",
+    )?);
+    let destination = MeshNodeId(parse_hex_32(
+        required(options, "destination-node-id-hex")?,
+        "--destination-node-id-hex",
+    )?);
+    let message = options
+        .get("message")
+        .cloned()
+        .unwrap_or_else(|| "Hydra carrier probe".to_owned());
+    let queue_capacity = parse_bale_queue(options)?;
+    let timeout = parse_bale_timeout(options)?;
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|error| format!("create Tokio runtime: {error}"))?;
+
+    runtime.block_on(async move {
+        let mut carrier = connect_to_peer(&token_path, &peer_id, queue_capacity, timeout)
+            .await
+            .map_err(|error| error.to_string())?;
+        let cipher = MeshCipher::new(&key);
+        let request = cipher
+            .seal(
+                FrameKind::Data,
+                0,
+                8,
+                local_node,
+                destination,
+                local_node,
+                1,
+                0,
+                message.as_bytes(),
+            )
+            .map_err(|error| error.to_string())?;
+        let started = Instant::now();
+        carrier
+            .send_frame(&request)
+            .map_err(|error| error.to_string())?;
+        let response = tokio::time::timeout(timeout, carrier.receive_frame())
+            .await
+            .map_err(|_| "timed out waiting for encrypted Meshnet acknowledgement".to_owned())?
+            .map_err(|error| error.to_string())?;
+        if response.kind != FrameKind::Acknowledgement
+            || response.source != destination
+            || response.destination != local_node
+            || response.packet_id != request.packet_id
+            || response.sequence != request.sequence
+        {
+            return Err("received an unexpected Meshnet acknowledgement".to_owned());
+        }
+        let returned = cipher.open(&response).map_err(|error| error.to_string())?;
+        if returned != message.as_bytes() {
+            return Err("the returned payload did not match the sent payload".to_owned());
+        }
+        println!(
+            "PASS carrier=bale-livekit authenticated_mesh_frame=true bytes={} rtt_ms={} peer_id={}",
+            returned.len(),
+            started.elapsed().as_millis(),
+            peer_id
+        );
+        Ok(())
+    })
+}
+
+#[cfg(feature = "bale-carrier")]
+fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
+    let value = value.strip_prefix("0x").unwrap_or(value);
+    if !value.is_ascii() || value.len() != 64 {
+        return Err(format!("{label} must be exactly 64 hexadecimal characters (32 bytes)"));
+    }
+    let mut bytes = [0_u8; 32];
+    for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
+        let pair =
+            std::str::from_utf8(pair).map_err(|error| format!("invalid {label}: {error}"))?;
+        bytes[index] = u8::from_str_radix(pair, 16)
+            .map_err(|_| format!("{label} contains invalid hexadecimal data"))?;
+    }
+    Ok(bytes)
+}
+
+#[cfg(feature = "bale-carrier")]
+fn parse_bale_queue(options: &HashMap<String, String>) -> Result<usize, String> {
+    let queue = options
+        .get("queue")
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .map_err(|error| format!("invalid --queue: {error}"))?
+        .unwrap_or(hydra::bale_carrier::DEFAULT_INBOUND_QUEUE_CAPACITY);
+    if !(1..=hydra::bale_carrier::MAX_INBOUND_QUEUE_CAPACITY).contains(&queue) {
+        return Err(format!(
+            "--queue must be between 1 and {}",
+            hydra::bale_carrier::MAX_INBOUND_QUEUE_CAPACITY
+        ));
+    }
+    Ok(queue)
+}
+
+#[cfg(feature = "bale-carrier")]
+fn parse_bale_timeout(options: &HashMap<String, String>) -> Result<Duration, String> {
+    let millis = options
+        .get("timeout-ms")
+        .map(|value| value.parse::<u64>())
+        .transpose()
+        .map_err(|error| format!("invalid --timeout-ms: {error}"))?
+        .unwrap_or(30_000);
+    if !(1..=120_000).contains(&millis) {
+        return Err("--timeout-ms must be between 1 and 120000".to_owned());
+    }
+    Ok(Duration::from_millis(millis))
+}
+
+#[cfg(feature = "bale-carrier")]
+fn prompt_line(prompt: &str) -> Result<String, String> {
+    use std::io::Write as _;
+    print!("{prompt}");
+    io::stdout()
+        .flush()
+        .map_err(|error| format!("flush prompt: {error}"))?;
+    let mut value = String::new();
+    io::stdin()
+        .read_line(&mut value)
+        .map_err(|error| format!("read terminal input: {error}"))?;
+    let value = value.trim().to_owned();
+    if value.is_empty() {
+        Err("input must not be empty".to_owned())
+    } else {
+        Ok(value)
+    }
+}
+
 fn parse_options(args: &[String]) -> Result<HashMap<String, String>, String> {
     let mut options = HashMap::new();
     let mut index = 0;
@@ -404,6 +717,12 @@ fn print_help() {
     println!("  hydra-lab relay --listen 127.0.0.1:4001 --upstream 127.0.0.1:4000 --messages 4 --close-after-messages 2");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --payload 'hello Hydra'");
     println!("  hydra-lab send --connect 127.0.0.1:4001 --file ./payload.bin");
+    #[cfg(feature = "bale-carrier")]
+    {
+        println!("  hydra-lab bale-login --phone +<country-code><number> --token-file ~/.config/hydra/bale.token");
+        println!("  hydra-lab bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <user-id> --key-hex <64-hex> --node-id-hex <64-hex>");
+        println!("  hydra-lab bale-connect --token-file ~/.config/hydra/bale.token --peer-id <user-id> --key-hex <64-hex> --node-id-hex <64-hex> --destination-node-id-hex <64-hex> --message 'hello Hydra'");
+    }
     println!();
     println!("Each origin or relay serves one client connection and exits.");
     println!("Optional flags: --timeout-ms N --max-bytes N --messages N (1..={MAX_MESSAGES_PER_SESSION})");

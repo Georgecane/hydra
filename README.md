@@ -6,7 +6,7 @@ Hydra is experimental. It does not claim that ordinary app connections can autom
 
 ## Current milestone
 
-The repository now contains eight experimental components:
+The repository now contains nine experimental components:
 
 1. A graph model that only recognizes edges with explicitly verified arbitrary-payload relay capability.
 2. A real TCP payload test using three locally controlled nodes: a client, a relay, and an echo origin.
@@ -16,8 +16,29 @@ The repository now contains eight experimental components:
 6. An application-message bridge probe with Base64 chunking, session/order checks, checksums, and a mock-channel test suite. No live third-party adapter is included.
 7. A local in-memory mailbox hub that forwards opaque bytes between endpoint queues, with queue backpressure, missing-peer, and payload-limit tests.
 8. An encrypted Meshnet data plane with ChaCha20-Poly1305 payload protection, bounded packet framing, hop-limit forwarding, expiring routes, and replay suppression.
+9. An optional live Bale LiveKit call carrier with normal user-account OTP sign-in, an allowlisted listener, and a command-line encrypted MeshFrame round-trip probe.
 
 The TCP lab is loopback-only and does not connect to external hosts or third-party applications. The mailbox hub is in-process and memory-only; it is a controlled model, not a live network transport.
+
+## Optional Bale LiveKit carrier
+
+Build commands in this section with the feature enabled:
+
+    cargo run --features bale-carrier -- bale-login --phone +<country-code><number> --token-file ~/.config/hydra/bale.token
+
+Hydra prompts for the one-time code and, only when needed, an account display name. It stores the access-token cookie in the specified file with owner-only permissions. Treat this file like a password and do not commit or share it.
+
+Start the listener on the receiving device, allowing only the expected caller's Bale user ID:
+
+    cargo run --features bale-carrier -- bale-listen --token-file ~/.config/hydra/bale.token --allow-peer <caller-user-id> --key-hex <64-hex-chars> --node-id-hex <64-hex-chars>
+
+Connect from the caller device and send an encrypted MeshFrame probe:
+
+    cargo run --features bale-carrier -- bale-connect --token-file ~/.config/hydra/bale.token --peer-id <receiver-user-id> --key-hex <same-64-hex-chars> --node-id-hex <caller-64-hex-chars> --destination-node-id-hex <receiver-64-hex-chars> --message "Hydra carrier probe"
+
+Each node ID and the shared key is 32 bytes represented as 64 hexadecimal characters. Choose distinct node IDs, and exchange the key out-of-band between the intended endpoints. Do not reuse a traffic key for unrelated peers.
+
+This integration uses a regular Bale user account and creates a separate user-to-user call session through the pinned, unofficial BaleVPN LiveKit/signaling implementation. It is not a bot and does not attach to or manipulate an already-running official Bale app socket. The command currently proves one encrypted bidirectional MeshFrame exchange through that call carrier; it does not yet expose an OS TUN interface or provide general Internet access during a blackout.
 
 ## Run the local test
 
@@ -73,7 +94,7 @@ Metrics are held in memory only and are not persisted across runs. Hydra does no
 - Fixed-service APIs, unknown capabilities, denied permissions, and disabled adapters cannot create generic-relay edges.
 - This milestone does not prove that any third-party service or restricted network can relay arbitrary data.
 
-See docs/transport-feasibility-experiment.md for the loopback TCP tests, application-message bridge probe, local mailbox experiment, and encrypted Meshnet data plane. The mesh layer is carrier-independent; real carrier integrations remain separately verified components.
+See docs/transport-feasibility-experiment.md for the loopback TCP tests, application-message bridge probe, local mailbox experiment, encrypted Meshnet data plane, and the optional Bale LiveKit carrier. The Bale carrier proves a one-hop encrypted call-session transfer, not the original official app's existing socket or general blackout Internet access.
 
 ## License
 

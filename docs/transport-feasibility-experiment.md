@@ -139,6 +139,15 @@ The `mesh` module defines the versioned `HYM1` frame. Each packet carries source
 
 The initial router supports explicit routes with time-to-live, rejects expired routes and immediate return loops, decrements hop limits, and suppresses recently seen duplicates. Route discovery, authenticated identity/key exchange, key rotation, fragmentation, acknowledgements/retransmission, and congestion control are not implemented yet. Keys must be provisioned securely to the intended endpoints and must not be reused across unrelated peers. CRC detects accidental corruption; AEAD provides payload and immutable packet-field authentication.
 
+## Bale LiveKit call carrier
+
+With the `bale-carrier` feature enabled, `src/bale_carrier.rs` implements a carrier over the public `LkTunnel::send_ip` and `set_on_ip` hooks from the pinned BaleVPN project. It includes regular user-account OTP sign-in, owner-only token storage, an explicit peer allowlist, bounded inbound queues, a command-line sender/listener, and a one-hop encrypted MeshFrame acknowledgement probe. Tests use the library's in-process loopback tunnel and do not contact Bale.
+
+This is a live provider-underlay integration path, but it is specifically a separate user-to-user call session through an unofficial Bale signaling/LiveKit implementation. It does not attach to the already-running official Bale client's existing socket and must not be described as if it does. The implementation can break if the provider protocol changes and should be used only by consenting test peers. The payload is end-to-end encrypted by Hydra; CRC-32 alone is not security.
+
+The live CLI verifies one bidirectional MeshFrame exchange. It is not yet a TUN device, default route, general Internet tunnel, multi-hop discovery protocol, or proof that Bale remains reachable during a nationwide outage. The MeshRouter is available as a separate core, but route discovery and traffic injection into an operating-system network interface remain future work.
+
 ## Next milestone
 
-Connect this packet data plane to a real client-side carrier. A carrier becomes routable only after its bidirectional end-to-end delivery has been verified and platform restrictions are understood. Keep carrier signaling/authentication separate from mesh routing so additional providers can be added without changing the packet protocol.
+Integrate the carrier with MeshRouter forwarding and a controlled TUN-based IP interface, then test route discovery, reconnect/retry behavior, congestion, and partial connectivity. Evaluate other providers independently: a Rubika adapter cannot be claimed until its own authorized client-side carrier path has a working round-trip proof. Keep the adapter model provider-neutral and do not pretend that one provider's call protocol can be reused unchanged for a different app.
+
