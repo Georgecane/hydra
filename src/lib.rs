@@ -2,8 +2,8 @@
 //! All current executable transport experiments are restricted to local loopback endpoints.
 
 pub mod adapter;
-pub mod message_broker;
 pub mod mesh;
+pub mod message_broker;
 pub mod service_bridge;
 pub mod transport;
 
