@@ -540,7 +540,6 @@ fn prompt_line(prompt: &str) -> Result<String, String> {
     }
 }
 
-
 fn run_keygen(options: &HashMap<String, String>) -> Result<(), String> {
     ensure_keys(options, &["key-file"])?;
     let path = PathBuf::from(required(options, "key-file")?);
