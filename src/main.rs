@@ -554,6 +554,11 @@ fn run_keygen(options: &HashMap<String, String>) -> Result<(), String> {
     }
     encoded.push(b'\n');
 
+    if let Some(parent) = path.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("create key directory {}: {error}", parent.display()))?;
+    }
+
     let mut file_options = fs::OpenOptions::new();
     file_options.write(true).create_new(true);
     #[cfg(unix)]
@@ -769,3 +774,41 @@ fn print_help() {
     println!("Fault-injection flags (local tests only; choose one): --delay-ms N, --truncate-response-bytes N, --close-after-messages N");
     println!("Only loopback addresses are accepted. CRC-32 detects corruption; it is not authentication.");
 }
+
+#[cfg(test)]
+mod keygen_tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn keygen_creates_private_key_without_overwriting() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after UNIX epoch")
+            .as_nanos();
+        let root = env::temp_dir().join(format!("hydra-keygen-{}-{unique}", process::id()));
+        let key_path = root.join("nested").join("mesh.key");
+        let mut options = HashMap::new();
+        options.insert("key-file".to_owned(), key_path.to_string_lossy().into_owned());
+
+        run_keygen(&options).expect("keygen should create missing parent directories");
+        let content = fs::read_to_string(&key_path).expect("read generated key file");
+        let encoded = content.trim();
+        assert_eq!(encoded.len(), 64);
+        assert!(encoded.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&key_path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
+
+        assert!(
+            run_keygen(&options).is_err(),
+            "keygen must not overwrite an existing key file"
+        );
+        fs::remove_dir_all(root).expect("remove keygen test directory");
+    }
+}
+
