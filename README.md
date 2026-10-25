@@ -6,7 +6,7 @@ Hydra is experimental. It does not claim that ordinary app connections can autom
 
 ## Current milestone
 
-The repository now contains seven experimental components:
+The repository now contains eight experimental components:
 
 1. A graph model that only recognizes edges with explicitly verified arbitrary-payload relay capability.
 2. A real TCP payload test using three locally controlled nodes: a client, a relay, and an echo origin.
@@ -15,6 +15,7 @@ The repository now contains seven experimental components:
 5. A scored route planner that considers observed availability, latency, payload limits, and failure history.
 6. An application-message bridge probe with Base64 chunking, session/order checks, checksums, and a mock-channel test suite. No live third-party adapter is included.
 7. A local in-memory mailbox hub that forwards opaque bytes between endpoint queues, with queue backpressure, missing-peer, and payload-limit tests.
+8. An encrypted Meshnet data plane with ChaCha20-Poly1305 payload protection, bounded packet framing, hop-limit forwarding, expiring routes, and replay suppression.
 
 The TCP lab is loopback-only and does not connect to external hosts or third-party applications. The mailbox hub is in-process and memory-only; it is a controlled model, not a live network transport.
 
@@ -72,7 +73,7 @@ Metrics are held in memory only and are not persisted across runs. Hydra does no
 - Fixed-service APIs, unknown capabilities, denied permissions, and disabled adapters cannot create generic-relay edges.
 - This milestone does not prove that any third-party service or restricted network can relay arbitrary data.
 
-See docs/transport-feasibility-experiment.md for the loopback TCP tests, application-message bridge probe, and local mailbox experiment. Passing local tests proves only the modeled components work; it does not prove that any real app or service can carry Hydra traffic during a blackout.
+See docs/transport-feasibility-experiment.md for the loopback TCP tests, application-message bridge probe, local mailbox experiment, and encrypted Meshnet data plane. The mesh layer is carrier-independent; real carrier integrations remain separately verified components.
 
 ## License
 

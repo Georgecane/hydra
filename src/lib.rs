@@ -3,6 +3,7 @@
 
 pub mod adapter;
 pub mod message_broker;
+pub mod mesh;
 pub mod service_bridge;
 pub mod transport;
 

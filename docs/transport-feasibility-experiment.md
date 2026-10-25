@@ -133,6 +133,12 @@ The unit tests verify binary message round trips between separate endpoint threa
 
 The model is deliberately not a real messaging service. It does not prove push delivery, independent-device connectivity, API permissions, third-party-service behavior, or access to the public Internet during a blackout.
 
+## Encrypted Meshnet data plane
+
+The `mesh` module defines the versioned `HYM1` frame. Each packet carries source and destination node IDs, previous hop, packet ID, sequence, hop limit, nonce, ciphertext length, ciphertext, and CRC-32. Payloads use ChaCha20-Poly1305 authenticated encryption. Relays can update previous-hop and hop-limit metadata while forwarding end-to-end ciphertext unchanged.
+
+The initial router supports explicit routes with time-to-live, rejects expired routes and immediate return loops, decrements hop limits, and suppresses recently seen duplicates. Route discovery, authenticated identity/key exchange, key rotation, fragmentation, acknowledgements/retransmission, and congestion control are not implemented yet. Keys must be provisioned securely to the intended endpoints and must not be reused across unrelated peers. CRC detects accidental corruption; AEAD provides payload and immutable packet-field authentication.
+
 ## Next milestone
 
-Connect the mailbox model to the application-message framing layer, then test retries, duplicate delivery, out-of-order replies, offline endpoints, and message expiration. After these invariants are tested, evaluate candidate channels only against documented APIs, explicit authorization, bidirectional delivery, realistic operational limits, and end-to-end reachability. Do not classify a fixed-service API as a generic relay without evidence that it supports the required behavior.
+Connect this packet data plane to a real client-side carrier. A carrier becomes routable only after its bidirectional end-to-end delivery has been verified and platform restrictions are understood. Keep carrier signaling/authentication separate from mesh routing so additional providers can be added without changing the packet protocol.
