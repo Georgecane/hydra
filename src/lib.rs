@@ -2,6 +2,8 @@
 //! All current executable transport experiments are restricted to local loopback endpoints.
 
 pub mod adapter;
+#[cfg(feature = "bale-carrier")]
+pub mod bale_carrier;
 pub mod mesh;
 pub mod message_broker;
 pub mod service_bridge;
