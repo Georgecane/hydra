@@ -52,8 +52,12 @@ impl std::fmt::Display for BaleCarrierError {
         match self {
             Self::Io(s) => write!(f, "Bale token file: {s}"),
             Self::TokenMissing => f.write_str("Bale access token is missing; sign in first"),
-            Self::QueueCapacityInvalid => f.write_str("carrier inbound queue capacity is outside the allowed range"),
-            Self::AllowlistEmpty => f.write_str("Bale listener requires at least one explicitly allowed peer ID"),
+            Self::QueueCapacityInvalid => {
+                f.write_str("carrier inbound queue capacity is outside the allowed range")
+            }
+            Self::AllowlistEmpty => {
+                f.write_str("Bale listener requires at least one explicitly allowed peer ID")
+            }
             Self::Authentication(s) => write!(f, "Bale authentication: {s}"),
             Self::Signaling(s) => write!(f, "Bale signaling: {s}"),
             Self::PeerNotFound => f.write_str("Bale peer ID could not be resolved"),
@@ -62,7 +66,9 @@ impl std::fmt::Display for BaleCarrierError {
             Self::TunnelStateClosed => f.write_str("LiveKit tunnel state stream closed"),
             Self::Timeout => f.write_str("timed out waiting for LiveKit peer connection"),
             Self::Frame(e) => write!(f, "invalid Meshnet frame: {e}"),
-            Self::FrameTooLarge => f.write_str("Meshnet frame exceeds the carrier message-size limit"),
+            Self::FrameTooLarge => {
+                f.write_str("Meshnet frame exceeds the carrier message-size limit")
+            }
             Self::Backpressure => f.write_str("carrier send queue is full"),
             Self::NotConnected => f.write_str("carrier tunnel is not connected"),
             Self::Closed => f.write_str("carrier receive stream is closed"),
@@ -413,11 +419,16 @@ async fn wait_for_tunnel(
                 TunnelState::Connected => return Ok(()),
                 TunnelState::Failed(reason) => return Err(BaleCarrierError::TunnelFailed(reason)),
                 TunnelState::Disconnected => {
-                    return Err(BaleCarrierError::TunnelFailed("disconnected before ready".to_owned()));
+                    return Err(BaleCarrierError::TunnelFailed(
+                        "disconnected before ready".to_owned(),
+                    ));
                 }
                 TunnelState::Connecting => {}
             }
-            state.changed().await.map_err(|_| BaleCarrierError::TunnelStateClosed)?;
+            state
+                .changed()
+                .await
+                .map_err(|_| BaleCarrierError::TunnelStateClosed)?;
         }
     })
     .await
