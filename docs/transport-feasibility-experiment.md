@@ -125,6 +125,14 @@ Current verification uses only a mock channel in unit tests. The tests cover chu
 
 This is not yet a third-party service adapter, a multi-hop network route, or evidence that a service like Rubika accepts arbitrary payloads. An ordinary app session does not provide arbitrary relay capability by itself. Any real adapter must use a documented interface, remain within its authorized behavior, and prove end-to-end return traffic before it can be considered further.
 
+## Local mailbox experiment
+
+The `message_broker` module adds an in-memory mailbox hub with independent endpoint queues. Endpoints send opaque byte messages with correlation identifiers; the hub does not inspect application payloads, run Hydra protocol logic, open sockets, or provide an Internet path.
+
+The unit tests verify binary message round trips between separate endpoint threads, explicit backpressure when a bounded inbox is full, rejection of unavailable peers, and hard limits on queue capacity and message size. This models a protocol-agnostic intermediary while keeping the experiment deterministic and local.
+
+The model is deliberately not a real messaging service. It does not prove push delivery, independent-device connectivity, API permissions, third-party-service behavior, or access to the public Internet during a blackout.
+
 ## Next milestone
 
-Run the mock conformance suite in CI, then design an isolated integration test against a deliberately controlled message API that implements the same documented contract. Do not enable a real-world adapter or classify a fixed-service API as a generic relay unless independent experiments prove the exact capability and authorization required.
+Connect the mailbox model to the application-message framing layer, then test retries, duplicate delivery, out-of-order replies, offline endpoints, and message expiration. After these invariants are tested, evaluate candidate channels only against documented APIs, explicit authorization, bidirectional delivery, realistic operational limits, and end-to-end reachability. Do not classify a fixed-service API as a generic relay without evidence that it supports the required behavior.
