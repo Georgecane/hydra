@@ -24,7 +24,9 @@ pub const DEFAULT_REPLAY_CACHE_CAPACITY: usize = 4096;
 pub struct MeshNodeId(pub [u8; 32]);
 
 impl MeshNodeId {
-    pub const fn new(bytes: [u8; 32]) -> Self { Self(bytes) }
+    pub const fn new(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 
     pub fn to_hex(self) -> String {
         let mut output = String::with_capacity(64);
@@ -158,14 +160,28 @@ impl MeshCipher {
         let mut nonce = [0_u8; 12];
         getrandom::fill(&mut nonce).map_err(|_| MeshError::RandomnessUnavailable)?;
         let aad = associated_data(kind, flags, source, destination, packet_id, sequence);
-        let ciphertext = self.cipher.encrypt(
-            Nonce::from_slice(&nonce),
-            Payload { msg: plaintext, aad: &aad },
-        ).map_err(|_| MeshError::AuthenticationFailed)?;
+        let ciphertext = self
+            .cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: plaintext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| MeshError::AuthenticationFailed)?;
 
         Ok(MeshFrame {
-            kind, flags, hop_limit, source, destination, previous_hop,
-            packet_id, sequence, nonce, ciphertext,
+            kind,
+            flags,
+            hop_limit,
+            source,
+            destination,
+            previous_hop,
+            packet_id,
+            sequence,
+            nonce,
+            ciphertext,
         })
     }
 
@@ -174,13 +190,22 @@ impl MeshCipher {
             return Err(MeshError::PayloadTooLarge);
         }
         let aad = associated_data(
-            frame.kind, frame.flags, frame.source, frame.destination,
-            frame.packet_id, frame.sequence,
+            frame.kind,
+            frame.flags,
+            frame.source,
+            frame.destination,
+            frame.packet_id,
+            frame.sequence,
         );
-        self.cipher.decrypt(
-            Nonce::from_slice(&frame.nonce),
-            Payload { msg: &frame.ciphertext, aad: &aad },
-        ).map_err(|_| MeshError::AuthenticationFailed)
+        self.cipher
+            .decrypt(
+                Nonce::from_slice(&frame.nonce),
+                Payload {
+                    msg: &frame.ciphertext,
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| MeshError::AuthenticationFailed)
     }
 }
 
@@ -207,7 +232,9 @@ fn associated_data(
 impl MeshFrame {
     /// Forward unchanged end-to-end ciphertext while updating hop-local fields.
     pub fn forwarded_by(&self, relay: MeshNodeId) -> Result<Self, MeshError> {
-        if self.hop_limit == 0 { return Err(MeshError::HopLimitExceeded); }
+        if self.hop_limit == 0 {
+            return Err(MeshError::HopLimitExceeded);
+        }
         let mut forwarded = self.clone();
         forwarded.hop_limit -= 1;
         forwarded.previous_hop = relay;
@@ -219,8 +246,8 @@ impl MeshFrame {
         if self.ciphertext.len() > MAX_CIPHERTEXT_BYTES {
             return Err(MeshError::PayloadTooLarge);
         }
-        let payload_len = u32::try_from(self.ciphertext.len())
-            .map_err(|_| MeshError::PayloadTooLarge)?;
+        let payload_len =
+            u32::try_from(self.ciphertext.len()).map_err(|_| MeshError::PayloadTooLarge)?;
         let mut wire = Vec::with_capacity(HEADER_LEN + self.ciphertext.len() + TRAILER_LEN);
         wire.extend_from_slice(MAGIC);
         wire.push(VERSION);
@@ -241,27 +268,44 @@ impl MeshFrame {
     }
 
     pub fn decode(wire: &[u8]) -> Result<Self, MeshError> {
-        if wire.len() < HEADER_LEN + TRAILER_LEN { return Err(MeshError::FrameTooShort); }
+        if wire.len() < HEADER_LEN + TRAILER_LEN {
+            return Err(MeshError::FrameTooShort);
+        }
         if wire.len() > HEADER_LEN + MAX_CIPHERTEXT_BYTES + TRAILER_LEN {
             return Err(MeshError::FrameTooLarge);
         }
-        if &wire[..4] != MAGIC { return Err(MeshError::InvalidMagic); }
-        if wire[4] != VERSION { return Err(MeshError::UnsupportedVersion); }
+        if &wire[..4] != MAGIC {
+            return Err(MeshError::InvalidMagic);
+        }
+        if wire[4] != VERSION {
+            return Err(MeshError::UnsupportedVersion);
+        }
         let kind = FrameKind::try_from(wire[5])?;
         let payload_len = u32::from_be_bytes(
-            wire[128..132].try_into().map_err(|_| MeshError::LengthMismatch)?
+            wire[128..132]
+                .try_into()
+                .map_err(|_| MeshError::LengthMismatch)?,
         ) as usize;
-        if payload_len > MAX_CIPHERTEXT_BYTES { return Err(MeshError::FrameTooLarge); }
-        let expected_len = HEADER_LEN.checked_add(payload_len)
+        if payload_len > MAX_CIPHERTEXT_BYTES {
+            return Err(MeshError::FrameTooLarge);
+        }
+        let expected_len = HEADER_LEN
+            .checked_add(payload_len)
             .and_then(|len| len.checked_add(TRAILER_LEN))
             .ok_or(MeshError::FrameTooLarge)?;
-        if wire.len() != expected_len { return Err(MeshError::LengthMismatch); }
+        if wire.len() != expected_len {
+            return Err(MeshError::LengthMismatch);
+        }
 
         let crc_offset = wire.len() - TRAILER_LEN;
         let expected_crc = u32::from_be_bytes(
-            wire[crc_offset..].try_into().map_err(|_| MeshError::LengthMismatch)?
+            wire[crc_offset..]
+                .try_into()
+                .map_err(|_| MeshError::LengthMismatch)?,
         );
-        if checksum(&wire[..crc_offset]) != expected_crc { return Err(MeshError::ChecksumMismatch); }
+        if checksum(&wire[..crc_offset]) != expected_crc {
+            return Err(MeshError::ChecksumMismatch);
+        }
 
         let mut source = [0_u8; 32];
         source.copy_from_slice(&wire[8..40]);
@@ -279,8 +323,16 @@ impl MeshFrame {
             source: MeshNodeId(source),
             destination: MeshNodeId(destination),
             previous_hop: MeshNodeId(previous_hop),
-            packet_id: u64::from_be_bytes(wire[104..112].try_into().map_err(|_| MeshError::LengthMismatch)?),
-            sequence: u32::from_be_bytes(wire[112..116].try_into().map_err(|_| MeshError::LengthMismatch)?),
+            packet_id: u64::from_be_bytes(
+                wire[104..112]
+                    .try_into()
+                    .map_err(|_| MeshError::LengthMismatch)?,
+            ),
+            sequence: u32::from_be_bytes(
+                wire[112..116]
+                    .try_into()
+                    .map_err(|_| MeshError::LengthMismatch)?,
+            ),
             nonce,
             ciphertext: wire[HEADER_LEN..crc_offset].to_vec(),
         })
@@ -313,12 +365,17 @@ pub struct MeshRouter {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MeshDecision {
     Deliver(MeshFrame),
-    Forward { next_hop: MeshNodeId, frame: MeshFrame },
+    Forward {
+        next_hop: MeshNodeId,
+        frame: MeshFrame,
+    },
 }
 
 impl MeshRouter {
     pub fn new(local_id: MeshNodeId, replay_capacity: usize) -> Result<Self, MeshError> {
-        if replay_capacity == 0 { return Err(MeshError::InvalidReplayCacheCapacity); }
+        if replay_capacity == 0 {
+            return Err(MeshError::InvalidReplayCacheCapacity);
+        }
         Ok(Self {
             local_id,
             routes: HashMap::new(),
@@ -328,7 +385,9 @@ impl MeshRouter {
         })
     }
 
-    pub fn local_id(&self) -> MeshNodeId { self.local_id }
+    pub fn local_id(&self) -> MeshNodeId {
+        self.local_id
+    }
 
     pub fn install_route(
         &mut self,
@@ -338,18 +397,30 @@ impl MeshRouter {
         ttl: Duration,
         now: Instant,
     ) -> Result<(), MeshError> {
-        if destination == self.local_id || next_hop == self.local_id
-            || destination == next_hop || hop_count == 0 || ttl.is_zero()
+        if destination == self.local_id
+            || next_hop == self.local_id
+            || destination == next_hop
+            || hop_count == 0
+            || ttl.is_zero()
         {
             return Err(MeshError::InvalidRoute);
         }
         let expires_at = now.checked_add(ttl).ok_or(MeshError::InvalidRoute)?;
-        self.routes.insert(destination, Route { next_hop, hop_count, expires_at });
+        self.routes.insert(
+            destination,
+            Route {
+                next_hop,
+                hop_count,
+                expires_at,
+            },
+        );
         Ok(())
     }
 
     pub fn route_hop_count(&mut self, destination: MeshNodeId, now: Instant) -> Option<u8> {
-        let expired = self.routes.get(&destination)
+        let expired = self
+            .routes
+            .get(&destination)
             .map(|route| route.expires_at <= now)
             .unwrap_or(true);
         if expired {
@@ -360,15 +431,23 @@ impl MeshRouter {
     }
 
     pub fn process(&mut self, frame: MeshFrame, now: Instant) -> Result<MeshDecision, MeshError> {
-        if frame.source == self.local_id { return Err(MeshError::RouteLoop); }
+        if frame.source == self.local_id {
+            return Err(MeshError::RouteLoop);
+        }
         self.remember(&frame)?;
 
         if frame.destination == self.local_id {
             return Ok(MeshDecision::Deliver(frame));
         }
-        if frame.hop_limit == 0 { return Err(MeshError::HopLimitExceeded); }
+        if frame.hop_limit == 0 {
+            return Err(MeshError::HopLimitExceeded);
+        }
 
-        let route = self.routes.get(&frame.destination).cloned().ok_or(MeshError::NoRoute)?;
+        let route = self
+            .routes
+            .get(&frame.destination)
+            .cloned()
+            .ok_or(MeshError::NoRoute)?;
         if route.expires_at <= now {
             self.routes.remove(&frame.destination);
             return Err(MeshError::NoRoute);
@@ -390,7 +469,9 @@ impl MeshRouter {
             sequence: frame.sequence,
             kind: frame.kind,
         };
-        if !self.replay_set.insert(key) { return Err(MeshError::DuplicatePacket); }
+        if !self.replay_set.insert(key) {
+            return Err(MeshError::DuplicatePacket);
+        }
         self.replay_order.push_back(key);
         while self.replay_order.len() > self.replay_capacity {
             if let Some(oldest) = self.replay_order.pop_front() {
@@ -405,37 +486,72 @@ impl MeshRouter {
 mod tests {
     use super::*;
 
-    fn node(value: u8) -> MeshNodeId { MeshNodeId([value; 32]) }
-    fn cipher(value: u8) -> MeshCipher { MeshCipher::new(&[value; 32]) }
+    fn node(value: u8) -> MeshNodeId {
+        MeshNodeId([value; 32])
+    }
+    fn cipher(value: u8) -> MeshCipher {
+        MeshCipher::new(&[value; 32])
+    }
 
     fn sample_frame(source: u8, destination: u8, hop_limit: u8) -> MeshFrame {
-        cipher(7).seal(
-            FrameKind::Data, 0, hop_limit, node(source), node(destination), node(source),
-            19, 2, b"hydra mesh payload",
-        ).unwrap()
+        cipher(7)
+            .seal(
+                FrameKind::Data,
+                0,
+                hop_limit,
+                node(source),
+                node(destination),
+                node(source),
+                19,
+                2,
+                b"hydra mesh payload",
+            )
+            .unwrap()
     }
 
     #[test]
     fn encrypted_frame_round_trips_over_wire_format() {
         let sender = cipher(7);
         let receiver = cipher(7);
-        let frame = sender.seal(
-            FrameKind::Data, 0, 12, node(1), node(3), node(1), 123, 4,
-            &[0, 255, 128, 1, 0, 42],
-        ).unwrap();
+        let frame = sender
+            .seal(
+                FrameKind::Data,
+                0,
+                12,
+                node(1),
+                node(3),
+                node(1),
+                123,
+                4,
+                &[0, 255, 128, 1, 0, 42],
+            )
+            .unwrap();
         let wire = frame.encode().unwrap();
         let decoded = MeshFrame::decode(&wire).unwrap();
         assert_eq!(decoded, frame);
-        assert_eq!(receiver.open(&decoded).unwrap(), vec![0, 255, 128, 1, 0, 42]);
+        assert_eq!(
+            receiver.open(&decoded).unwrap(),
+            vec![0, 255, 128, 1, 0, 42]
+        );
     }
 
     #[test]
     fn ciphertext_tampering_fails_authentication() {
         let sender = cipher(7);
         let receiver = cipher(7);
-        let mut frame = sender.seal(
-            FrameKind::Data, 0, 5, node(1), node(2), node(1), 9, 0, b"confidential",
-        ).unwrap();
+        let mut frame = sender
+            .seal(
+                FrameKind::Data,
+                0,
+                5,
+                node(1),
+                node(2),
+                node(1),
+                9,
+                0,
+                b"confidential",
+            )
+            .unwrap();
         frame.ciphertext[0] ^= 1;
         assert_eq!(receiver.open(&frame), Err(MeshError::AuthenticationFailed));
     }
@@ -444,9 +560,19 @@ mod tests {
     fn relays_can_update_hop_fields_without_decrypting() {
         let sender = cipher(7);
         let receiver = cipher(7);
-        let frame = sender.seal(
-            FrameKind::Data, 0, 5, node(1), node(3), node(1), 10, 0, b"end-to-end",
-        ).unwrap();
+        let frame = sender
+            .seal(
+                FrameKind::Data,
+                0,
+                5,
+                node(1),
+                node(3),
+                node(1),
+                10,
+                0,
+                b"end-to-end",
+            )
+            .unwrap();
         let forwarded = frame.forwarded_by(node(2)).unwrap();
         assert_eq!(forwarded.hop_limit, 4);
         assert_eq!(forwarded.previous_hop, node(2));
@@ -465,7 +591,9 @@ mod tests {
     fn router_forwards_and_decrements_hop_limit() {
         let now = Instant::now();
         let mut router = MeshRouter::new(node(2), 16).unwrap();
-        router.install_route(node(3), node(4), 2, Duration::from_secs(60), now).unwrap();
+        router
+            .install_route(node(3), node(4), 2, Duration::from_secs(60), now)
+            .unwrap();
         match router.process(sample_frame(1, 3, 8), now).unwrap() {
             MeshDecision::Forward { next_hop, frame } => {
                 assert_eq!(next_hop, node(4));
@@ -481,7 +609,10 @@ mod tests {
         let now = Instant::now();
         let mut router = MeshRouter::new(node(2), 16).unwrap();
         let packet = sample_frame(1, 2, 1);
-        assert_eq!(router.process(packet.clone(), now), Ok(MeshDecision::Deliver(packet)));
+        assert_eq!(
+            router.process(packet.clone(), now),
+            Ok(MeshDecision::Deliver(packet))
+        );
     }
 
     #[test]
@@ -489,7 +620,9 @@ mod tests {
         let now = Instant::now();
         let mut router = MeshRouter::new(node(2), 16).unwrap();
         let packet = sample_frame(1, 3, 8);
-        router.install_route(node(3), node(4), 2, Duration::from_secs(60), now).unwrap();
+        router
+            .install_route(node(3), node(4), 2, Duration::from_secs(60), now)
+            .unwrap();
         router.process(packet.clone(), now).unwrap();
         assert_eq!(router.process(packet, now), Err(MeshError::DuplicatePacket));
     }
@@ -498,13 +631,17 @@ mod tests {
     fn expired_routes_and_immediate_loops_are_rejected() {
         let now = Instant::now();
         let mut router = MeshRouter::new(node(2), 16).unwrap();
-        router.install_route(node(3), node(4), 2, Duration::from_secs(1), now).unwrap();
+        router
+            .install_route(node(3), node(4), 2, Duration::from_secs(1), now)
+            .unwrap();
         assert_eq!(
             router.process(sample_frame(1, 3, 4), now + Duration::from_secs(2)),
             Err(MeshError::NoRoute),
         );
         let mut second = MeshRouter::new(node(2), 16).unwrap();
-        second.install_route(node(3), node(1), 2, Duration::from_secs(30), now).unwrap();
+        second
+            .install_route(node(3), node(1), 2, Duration::from_secs(30), now)
+            .unwrap();
         let mut packet = sample_frame(4, 3, 4);
         packet.previous_hop = node(1);
         assert_eq!(second.process(packet, now), Err(MeshError::RouteLoop));
@@ -517,7 +654,14 @@ mod tests {
         assert_eq!(MeshFrame::decode(&wire), Err(MeshError::FrameTooLarge));
         assert_eq!(
             cipher(7).seal(
-                FrameKind::Data, 0, 4, node(1), node(2), node(1), 1, 0,
+                FrameKind::Data,
+                0,
+                4,
+                node(1),
+                node(2),
+                node(1),
+                1,
+                0,
                 &vec![0; MAX_PLAINTEXT_BYTES + 1],
             ),
             Err(MeshError::PayloadTooLarge),
