@@ -60,7 +60,7 @@ impl LocalMailboxHub {
         let raw = self
             .inner
             .next_id
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
+            .try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| MailboxError::IdExhausted)?;
         let id = EndpointId(raw);
         let (tx, rx) = sync_channel(self.capacity);
