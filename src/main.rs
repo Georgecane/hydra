@@ -1,26 +1,26 @@
 use hydra::adapter::{LoopbackTcpAdapter, TransportAdapter};
-use hydra::transport::{
-    checksum, serve_session_with_faults, FaultInjection, Status, DEFAULT_MAX_PAYLOAD_BYTES,
-    DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
-};
-use hydra::{LinkCapability, NodeId, TransportGraph};
 #[cfg(feature = "bale-carrier")]
 use hydra::bale_carrier::{
     connect_to_peer, BaleCarrierListener, BaleLoginChallenge, BaleOtpProgress,
 };
 #[cfg(feature = "bale-carrier")]
 use hydra::mesh::{FrameKind, MeshCipher, MeshNodeId};
-#[cfg(feature = "bale-carrier")]
-use std::path::PathBuf;
-#[cfg(feature = "bale-carrier")]
-use std::time::Instant;
+use hydra::transport::{
+    checksum, serve_session_with_faults, FaultInjection, Status, DEFAULT_MAX_PAYLOAD_BYTES,
+    DEFAULT_TIMEOUT_MS, MAX_MESSAGES_PER_SESSION, MAX_PAYLOAD_BYTES,
+};
+use hydra::{LinkCapability, NodeId, TransportGraph};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::net::{SocketAddr, TcpListener};
+#[cfg(feature = "bale-carrier")]
+use std::path::PathBuf;
 use std::process;
 use std::time::Duration;
+#[cfg(feature = "bale-carrier")]
+use std::time::Instant;
 
 fn main() {
     if let Err(error) = run() {
@@ -246,7 +246,6 @@ fn run_client(options: &HashMap<String, String>) -> Result<(), String> {
     Ok(())
 }
 
-
 #[cfg(feature = "bale-carrier")]
 fn run_bale_login(options: &HashMap<String, String>) -> Result<(), String> {
     ensure_keys(options, &["phone", "token-file", "signup-name"])?;
@@ -323,14 +322,10 @@ fn run_bale_listen(options: &HashMap<String, String>) -> Result<(), String> {
         .map_err(|error| format!("create Tokio runtime: {error}"))?;
 
     runtime.block_on(async move {
-        let mut listener = BaleCarrierListener::bind(
-            &token_path,
-            allowed_peers,
-            queue_capacity,
-            timeout,
-        )
-        .await
-        .map_err(|error| error.to_string())?;
+        let mut listener =
+            BaleCarrierListener::bind(&token_path, allowed_peers, queue_capacity, timeout)
+                .await
+                .map_err(|error| error.to_string())?;
         println!("READY carrier=bale-livekit mode=allowlisted-listener");
         loop {
             let (peer_id, carrier) = listener
@@ -481,7 +476,9 @@ fn run_bale_connect(options: &HashMap<String, String>) -> Result<(), String> {
 fn parse_hex_32(value: &str, label: &str) -> Result<[u8; 32], String> {
     let value = value.strip_prefix("0x").unwrap_or(value);
     if !value.is_ascii() || value.len() != 64 {
-        return Err(format!("{label} must be exactly 64 hexadecimal characters (32 bytes)"));
+        return Err(format!(
+            "{label} must be exactly 64 hexadecimal characters (32 bytes)"
+        ));
     }
     let mut bytes = [0_u8; 32];
     for (index, pair) in value.as_bytes().chunks_exact(2).enumerate() {
